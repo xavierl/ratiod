@@ -20,7 +20,7 @@ annonce aux trackers HTTP un upload fictif pour des `.torrent`, sans rien transf
 - Pas de CI ni de registre d'images : l'image est construite sur le NAS (`docker compose build`).
 
 **Critères de réussite**
-1. Les 110 profils `.client` de Joal se chargent et produisent une requête d'annonce valide.
+1. Les 95 profils `.client` de Joal se chargent et produisent une requête d'annonce valide.
 2. Pour un même profil, la requête d'annonce (query + headers) a la même forme que celle de Joal.
 3. Un dossier `joal-conf` existant (config.json, clients/, torrents/) fonctionne en le montant sur `/data`.
 4. Image Docker < 15 Mo ; mémoire au repos < 30 Mo avec 200 torrents actifs.
@@ -46,8 +46,8 @@ annonce aux trackers HTTP un upload fictif pour des `.torrent`, sans rien transf
 
 ## 3. Architecture
 
-Un seul binaire Rust, `ratiod`, qui embarque le frontend compilé. Stack : `tokio`, `axum`, `reqwest` (rustls,
-gzip), `serde`/`serde_json`, `notify`, `rust-embed`, `rand`/`rand_regex`, `sha1`, `tracing`. Frontend :
+Un seul binaire Rust, `ratiod`, qui embarque le frontend compilé. Stack : `tokio`, `axum`, `hyper` + `hyper-rustls` (client HTTP sans headers implicites,
+gzip via `flate2`), `serde`/`serde_json`, `notify`, `rust-embed`, `rand`/`rand_regex`, `sha1`, `tracing`. Frontend :
 Svelte 5 (runes) + Vite + Tailwind CSS v4, sans routeur.
 
 ```
@@ -68,7 +68,7 @@ ratiod/
 │   ├── library.rs       dossier torrents/ + archived/ + watcher
 │   ├── engine.rs        acteur orchestrateur (seul propriétaire de l'état)
 │   └── api.rs           routes axum, SSE, fichiers statiques embarqués
-├── clients/             les ~110 profils .client de Joal (embarqués)
+├── clients/             les ~95 profils .client de Joal (embarqués)
 ├── web/                 app Svelte (build → web/dist, embarqué)
 ├── Dockerfile
 └── docker-compose.yml
@@ -79,8 +79,8 @@ ratiod/
 L'`engine` est **une tâche tokio unique qui possède tout l'état** (torrents actifs, file d'attente, bande passante,
 profil client). Les autres composants communiquent avec elle par messages :
 
-- `mpsc<Command>` vers l'engine : `Start`, `Stop`, `UpdateConfig`, `TorrentFileAdded(path)`,
-  `TorrentFileRemoved(path)`, `DeleteTorrent(infohash)`, `AnnounceDone(infohash, Result)`.
+- `mpsc<Command>` vers l'engine : `Start`, `Stop`, `UpdateConfig`, `Rescan`, `Delete(infohash)`,
+  `AnnounceDone(infohash, Result)`, `Shutdown`. Un `Rescan` relit le dossier et réconcilie : nouveaux fichiers en file, fichiers disparus retirés (avec `stopped`).
 - `watch<Snapshot>` depuis l'engine : l'état complet, sérialisable, publié à chaque changement et à chaque tick.
 
 Les annonces HTTP sont lancées dans des tâches séparées (`tokio::spawn`), plafonnées à 20 simultanées par un
@@ -96,7 +96,7 @@ déclenchement des annonces dont l'heure est passée) et le rafraîchissement du
 UI ──POST /api/torrents──▶ api ──écrit──▶ /data/torrents/x.torrent
                                               │ notify
                                               ▼
-                         library ──TorrentFileAdded──▶ engine ──spawn──▶ tracker (started)
+                         library ──Rescan──▶ engine ──spawn──▶ tracker (started)
                                                          ▲                    │
                                                          └──AnnounceDone──────┘
 engine ──watch<Snapshot>──▶ api ──SSE /api/events──▶ UI
@@ -190,7 +190,7 @@ avec la casse `encodedHexCase`. Il s'applique à l'info_hash (20 octets bruts), 
 
 - Requête `GET {announce_url}{?|&}{query}`. La query est ajoutée **telle quelle, sans ré-encodage** : l'URL est
   construite comme chaîne puis parsée, et un test vérifie que le chemin+query envoyé est identique octet pour octet.
-- `reqwest` est configuré sans headers par défaut : seuls les headers du profil sont envoyés (plus `Host`).
+- Client `hyper` (et non `reqwest`, qui ajoute un `Accept: */*` impossible à retirer) : seuls `Host` (en premier, comme les vrais clients) puis les headers du profil sont envoyés, en casse « Title-Case ».
   Timeout de 30 s, gzip accepté si le profil l'annonce.
 - Réponse bencode :
   - `failure reason` → erreur.
@@ -224,8 +224,8 @@ Reprise exacte de `BandwidthDispatcher` :
 
 - **Dossiers** : `/data/torrents` (à seeder) et `/data/torrents/archived`, créés au besoin.
 - **Démarrage** : scan de `torrents/*.torrent`. Les fichiers invalides sont signalés dans les logs et ignorés.
-- **Watcher** (`notify`, regroupement des événements sur 500 ms) : un ajout ou une suppression envoie
-  `TorrentFileAdded` / `TorrentFileRemoved` à l'engine. Le dossier `archived` est ignoré.
+- **Watcher** (`notify`, regroupement des événements sur 500 ms) : tout changement envoie `Rescan` à l'engine.
+  Filet de sécurité : rescan périodique toutes les 30 s (volumes réseau où inotify ne remonte rien). Le dossier `archived` est ignoré.
 - **`add(bytes, filename)`** (upload depuis l'UI) :
   1. Parse d'abord ; si le fichier est invalide, il est refusé sans rien écrire.
   2. Si son info_hash est déjà présent dans `torrents/`, il est refusé comme doublon.
@@ -239,7 +239,7 @@ Reprise exacte de `BandwidthDispatcher` :
 ```rust
 struct ActiveTorrent {
     torrent: MockedTorrent,
-    status: Status,              // Starting | Seeding | Stopping
+    status: Status,              // Starting | Seeding
     uploaded: u64,               // octets cumulés depuis l'activation
     speed: u64,                  // octets/s attribués
     seeders: Option<u32>, leechers: Option<u32>,
@@ -314,7 +314,7 @@ Une page unique, responsive, avec thème clair/sombre automatique (`prefers-colo
   Le bouton « parcourir » ouvre un sélecteur multi-fichiers filtré sur `.torrent`.
 - **Notifications** : une par lot d'upload (« 3 ajoutés, 1 doublon »), plus les erreurs réseau.
 - **Tableau des torrents** : nom (tronqué, complet au survol), débit, envoyé, S/L, prochaine annonce (compte à
-  rebours local entre deux snapshots), bouton supprimer (avec confirmation). Les torrents en erreur affichent
+  rebours rafraîchi par les snapshots, un par seconde), bouton supprimer (avec confirmation). Les torrents en erreur affichent
   « Échec n/5 » en couleur d'avertissement, avec `lastError` au survol. Sur mobile, le tableau devient une liste de
   cartes.
 - **Panneau Réglages** (latéral) : deux champs min/max (ko/s), seeds simultanés, sélecteur de client avec
@@ -347,7 +347,7 @@ Arborescence `web/src` : `App.svelte`, `lib/api.ts` (fetch + EventSource), `lib/
   - Chaque politique de rafraîchissement, avec une horloge injectable.
   - `build_query` : events none/started/stopped, numwant/numwantOnStop, suppression de `{ip}`, `&` en double.
   - Vecteurs repris des tests Java de Joal quand ils existent.
-  - Test global : **les 110 profils se chargent et produisent une query sans placeholder**.
+  - Test global : **les 95 profils se chargent et produisent une query sans placeholder**.
 - `bandwidth` : formule de poids, répartition, cas Σ poids = 0, cumul.
 - `library` : ajout, doublon, invalide, archivage avec conflit de nom.
 - **Intégration engine + faux tracker** (serveur axum local) :
