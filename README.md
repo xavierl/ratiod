@@ -7,16 +7,56 @@ une interface web moderne, pas d'authentification (usage sur réseau local).
 > **Avertissement** (repris de Joal) : ratiod n'est pas conçu pour aider à télécharger du contenu illégal.
 > Respecte la loi de ton pays et les règles de tes trackers.
 
-## Démarrage sur un NAS (Docker)
+## Démarrage sur un NAS (Docker Compose)
+
+Prérequis : Docker avec le plugin Compose (`docker compose version`). L'image est construite localement à partir
+des sources (aucune image n'est publiée) ; la première construction prend quelques minutes.
 
 ```bash
-git clone https://github.com/xavierl/ratiod.git
+git clone https://github.com/xavierl/ratiod.git   # dépôt privé : identifiant GitHub + token d'accès
 cd ratiod
 docker compose up -d --build
 ```
 
 L'interface est sur `http://<ip-du-nas>:5081`. Glisse tes `.torrent` sur la page, ou dépose-les dans
-`data/torrents/`.
+`data/torrents/` (pris en compte automatiquement).
+
+### Le fichier `docker-compose.yml`
+
+```yaml
+services:
+  ratiod:
+    build: .
+    image: ratiod:local
+    container_name: ratiod
+    restart: unless-stopped
+    ports:
+      - "5081:5081"     # interface web
+      - "49200:49200"   # port pair annoncé aux trackers
+    volumes:
+      - ./data:/data
+    environment:
+      RUST_LOG: info
+      # RATIOD_AUTOSTART: "false"
+    stop_grace_period: 15s
+```
+
+- **Interface web** : pour l'exposer sur un autre port, change seulement la partie gauche (`"8080:5081"`).
+  Il n'y a pas d'authentification : ne l'ouvre pas sur Internet.
+- **Port pair** : la valeur annoncée aux trackers est `RATIOD_PEER_PORT` (49200 dans l'image). Pour en changer,
+  modifie les deux côtés du mapping **et** la variable, par exemple `"51413:51413"` et `RATIOD_PEER_PORT: "51413"`.
+- **Données** : tout est dans `./data` à côté du fichier compose (`config.json`, `torrents/`, `clients/`).
+- **Arrêt** : `stop_grace_period` laisse le temps d'envoyer les annonces `stopped` aux trackers (5 s max).
+- L'image part de `scratch` : pas de shell dans le conteneur, utilise `docker compose logs` pour diagnostiquer.
+
+### Commandes utiles
+
+```bash
+docker compose logs -f ratiod                 # suivre les logs
+docker compose restart ratiod                 # redémarrer
+docker compose down                           # arrêter (envoie les annonces « stopped »)
+git pull && docker compose up -d --build      # mettre à jour vers la dernière version
+```
 
 ## Migration depuis Joal
 
