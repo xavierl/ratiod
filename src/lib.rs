@@ -3,3 +3,4 @@
 pub mod bencode;
 #[doc(hidden)]
 pub mod testutil;
+pub mod torrent;
