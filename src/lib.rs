@@ -1,5 +1,6 @@
 //! ratiod: a lightweight BitTorrent ratio emulator (Rust rewrite of Joal).
 
+pub mod api;
 pub mod bandwidth;
 pub mod bencode;
 pub mod config;
