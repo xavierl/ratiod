@@ -102,9 +102,11 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          # Only the packages, not the web-dist build artifact.
+          pattern: "{linux,windows}-*"
           path: dist
           merge-multiple: true
-      - run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - run: cd dist && ls -l && sha256sum *.tar.gz *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
