@@ -1,0 +1,9 @@
+ratiod
+Copyright 2026 xavierl
+
+Ce projet est une réécriture en Rust de JOAL (Jack Of All Trades),
+https://github.com/anthonyraymond/joal, Copyright Anthony Raymond,
+distribué sous licence Apache 2.0.
+
+Les profils de clients BitTorrent du dossier `clients/` proviennent de JOAL
+et sont utilisés sans modification.
