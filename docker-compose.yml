@@ -1,0 +1,15 @@
+services:
+  ratiod:
+    build: .
+    image: ratiod:local
+    container_name: ratiod
+    restart: unless-stopped
+    ports:
+      - "5081:5081"     # interface web
+      - "49200:49200"   # port pair annoncé aux trackers
+    volumes:
+      - ./data:/data
+    environment:
+      RUST_LOG: info
+      # RATIOD_AUTOSTART: "false"
+    stop_grace_period: 15s
