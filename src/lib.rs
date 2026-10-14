@@ -4,6 +4,7 @@ pub mod bandwidth;
 pub mod bencode;
 pub mod config;
 pub mod emulation;
+pub mod library;
 #[doc(hidden)]
 pub mod testutil;
 pub mod torrent;
