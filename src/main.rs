@@ -1,3 +1,5 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::process::ExitCode;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -11,12 +13,23 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
+    let result =
+        tokio::runtime::Runtime::new().context("cannot start the async runtime").and_then(|rt| rt.block_on(run()));
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            tracing::error!("{error:#}");
+            pause_if_double_clicked();
+            ExitCode::FAILURE
+        }
+    }
+}
 
+async fn run() -> anyhow::Result<()> {
     let settings = Settings::from_env()?;
     std::fs::create_dir_all(&settings.data_dir)
         .with_context(|| format!("cannot create {}", settings.data_dir.display()))?;
@@ -42,7 +55,11 @@ async fn main() -> anyhow::Result<()> {
     let app = api::router(AppState { engine: engine.clone(), library, clients_dir });
     let listener =
         TcpListener::bind(settings.bind).await.with_context(|| format!("cannot listen on {}", settings.bind))?;
-    tracing::info!("ratiod is ready on http://{}", settings.bind);
+    let url = ui_url(settings.bind);
+    tracing::info!("ratiod is ready on {url}");
+    if settings.open_browser {
+        open_browser(&url);
+    }
 
     // Not a graceful axum shutdown: SSE streams never end on their own.
     tokio::select! {
@@ -112,4 +129,42 @@ async fn shutdown_signal() {
         () = terminate => {}
     }
     tracing::info!("shutting down, sending stopped announces");
+}
+
+/// Browsers cannot open `0.0.0.0`: point them at the loopback address instead.
+fn ui_url(bind: SocketAddr) -> String {
+    let host = match bind.ip() {
+        ip if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        ip => ip,
+    };
+    format!("http://{}", SocketAddr::new(host, bind.port()))
+}
+
+fn open_browser(url: &str) {
+    let mut command = if cfg!(windows) {
+        let mut c = std::process::Command::new("rundll32");
+        c.args(["url.dll,FileProtocolHandler", url]);
+        c
+    } else if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if let Err(error) = command.spawn() {
+        tracing::warn!("cannot open the browser ({error}); open {url} yourself");
+    }
+}
+
+/// A console started by double-clicking `ratiod.exe` closes as soon as the
+/// process exits: keep it open so the error can be read.
+fn pause_if_double_clicked() {
+    if cfg!(windows) {
+        eprintln!("Appuie sur Entrée pour fermer cette fenêtre.");
+        let _ = std::io::stdin().read_line(&mut String::new());
+    }
 }

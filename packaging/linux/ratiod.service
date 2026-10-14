@@ -1,0 +1,16 @@
+# systemd user service: copy to ~/.config/systemd/user/ then
+#   systemctl --user daemon-reload && systemctl --user enable --now ratiod
+[Unit]
+Description=ratiod, BitTorrent ratio emulator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/ratiod
+Restart=on-failure
+# Gives ratiod time to send its "stopped" announces.
+TimeoutStopSec=15
+# Environment=RATIOD_PEER_PORT=49200
+
+[Install]
+WantedBy=default.target

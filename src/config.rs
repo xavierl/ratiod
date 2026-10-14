@@ -90,6 +90,8 @@ pub struct Settings {
     pub data_dir: PathBuf,
     pub peer_port: u16,
     pub autostart: bool,
+    /// Opens the web UI in the default browser once the server is listening.
+    pub open_browser: bool,
 }
 
 impl Settings {
@@ -102,16 +104,15 @@ impl Settings {
             .unwrap_or_else(|| "127.0.0.1:5081".into())
             .parse()
             .context("RATIOD_BIND must look like 0.0.0.0:5081")?;
-        let data_dir = get("RATIOD_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("data"));
+        let data_dir = get("RATIOD_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| default_data_dir(&get));
         let peer_port = match get("RATIOD_PEER_PORT") {
             Some(v) => v.parse().context("RATIOD_PEER_PORT must be a port number (1-65535)")?,
             None => rand::rng().random_range(49152..=65534),
         };
-        let autostart = match get("RATIOD_AUTOSTART") {
-            None => true,
-            Some(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off"),
-        };
-        Ok(Self { bind, data_dir, peer_port, autostart })
+        let autostart = get("RATIOD_AUTOSTART").is_none_or(|v| is_true(&v));
+        // Windows users start the .exe by double-clicking it: show them the UI.
+        let open_browser = get("RATIOD_OPEN_BROWSER").map_or(cfg!(windows), |v| is_true(&v));
+        Ok(Self { bind, data_dir, peer_port, autostart, open_browser })
     }
 
     pub fn config_path(&self) -> PathBuf {
@@ -121,6 +122,22 @@ impl Settings {
     pub fn clients_dir(&self) -> PathBuf {
         self.data_dir.join("clients")
     }
+}
+
+fn is_true(value: &str) -> bool {
+    !matches!(value.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off")
+}
+
+/// Per-user data folder: `%APPDATA%\ratiod` on Windows, `$XDG_DATA_HOME/ratiod` or
+/// `~/.local/share/ratiod` elsewhere; `./data` if none of these is known.
+fn default_data_dir(get: &impl Fn(&str) -> Option<String>) -> PathBuf {
+    let non_empty = |key: &str| get(key).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let base = if cfg!(windows) {
+        non_empty("APPDATA")
+    } else {
+        non_empty("XDG_DATA_HOME").or_else(|| non_empty("HOME").map(|home| home.join(".local").join("share")))
+    };
+    base.map_or_else(|| PathBuf::from("data"), |base| base.join("ratiod"))
 }
 
 #[cfg(test)]
@@ -206,6 +223,7 @@ mod tests {
         assert_eq!(empty.data_dir, PathBuf::from("data"));
         assert!((49152..=65534).contains(&empty.peer_port));
         assert!(empty.autostart);
+        assert_eq!(empty.open_browser, cfg!(windows));
         assert_eq!(empty.config_path(), PathBuf::from("data").join("config.json"));
 
         let env: HashMap<&str, &str> = HashMap::from([
@@ -213,12 +231,34 @@ mod tests {
             ("RATIOD_DATA_DIR", "/data"),
             ("RATIOD_PEER_PORT", "49200"),
             ("RATIOD_AUTOSTART", "false"),
+            ("RATIOD_OPEN_BROWSER", "true"),
+            ("HOME", "/home/me"),
         ]);
         let s = Settings::from_lookup(|k| env.get(k).map(|v| v.to_string())).unwrap();
         assert_eq!(s.bind, "0.0.0.0:8080".parse().unwrap());
         assert_eq!(s.data_dir, PathBuf::from("/data"));
         assert_eq!(s.peer_port, 49200);
         assert!(!s.autostart);
+        assert!(s.open_browser);
+    }
+
+    #[test]
+    fn data_dir_defaults_to_the_user_data_folder() {
+        let env: HashMap<&str, &str> =
+            HashMap::from([("HOME", "/home/me"), ("APPDATA", r"C:\Users\me\AppData\Roaming")]);
+        let s = Settings::from_lookup(|k| env.get(k).map(|v| v.to_string())).unwrap();
+        if cfg!(windows) {
+            assert_eq!(s.data_dir, PathBuf::from(r"C:\Users\me\AppData\Roaming").join("ratiod"));
+        } else {
+            assert_eq!(s.data_dir, PathBuf::from("/home/me/.local/share/ratiod"));
+            let xdg = Settings::from_lookup(|k| match k {
+                "XDG_DATA_HOME" => Some("/xdg".into()),
+                "HOME" => Some("/home/me".into()),
+                _ => None,
+            })
+            .unwrap();
+            assert_eq!(xdg.data_dir, PathBuf::from("/xdg/ratiod"));
+        }
     }
 
     #[test]
