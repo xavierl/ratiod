@@ -24,7 +24,14 @@ fn all_95_profiles_load_and_build_complete_queries() {
 fn qbittorrent_query_matches_joal_shape() {
     let none = tempfile::tempdir().unwrap();
     let mut profile = emulation::load_profile("qbittorrent-5.2.4.client", none.path()).unwrap();
-    let p = AnnounceParams { info_hash: [0x12; 20], uploaded: 42, downloaded: 0, left: 0, port: 49200, event: Event::Started };
+    let p = AnnounceParams {
+        info_hash: [0x12; 20],
+        uploaded: 42,
+        downloaded: 0,
+        left: 0,
+        port: 49200,
+        event: Event::Started,
+    };
     let q = profile.build_query(&p, Instant::now());
     let shape = regex::Regex::new(
         r"^info_hash=(%12){20}&peer_id=-qB5240-[A-Za-z0-9_~\(\)\!\.\*-]{12}&port=49200&uploaded=42&downloaded=0&left=0&corrupt=0&key=[0-9A-F]{1,8}&event=started&numwant=200&compact=1&no_peer_id=1&supportcrypto=1&redundant=0$",

@@ -97,17 +97,13 @@ impl Algorithm {
                     total += index;
                     out.push(pool[index]);
                 }
-                let check = if total % base == 0 { 0 } else { base - total % base };
+                let check = if total.is_multiple_of(*base) { 0 } else { base - total % base };
                 out.push(pool[check]);
                 out
             }
             Algorithm::Hex { length, strip_leading_zeros } => {
                 let hex: Vec<u8> = (0..*length).map(|_| HEX_UPPER[rng.random_range(0..16)]).collect();
-                if *strip_leading_zeros {
-                    hex.into_iter().skip_while(|&c| c == b'0').collect()
-                } else {
-                    hex
-                }
+                if *strip_leading_zeros { hex.into_iter().skip_while(|&c| c == b'0').collect() } else { hex }
             }
             Algorithm::DigitRange { lower, upper } => format!("{:x}", rng.random_range(*lower..=*upper)).into_bytes(),
         }

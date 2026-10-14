@@ -147,7 +147,8 @@ mod tests {
 
     #[test]
     fn validation_names_the_bad_field() {
-        let cases: [(fn(&mut AppConfig), &str); 5] = [
+        type Case = (fn(&mut AppConfig), &'static str);
+        let cases: [Case; 5] = [
             (|c| c.max_upload_rate = 10, "maxUploadRate"),
             (|c| c.simultaneous_seed = 0, "simultaneousSeed"),
             (|c| c.upload_ratio_target = 0.0, "uploadRatioTarget"),

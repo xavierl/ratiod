@@ -177,11 +177,11 @@ impl ClientProfile {
         } else {
             q.replace("{event}", p.event.as_str())
         };
-        if q.contains("{key}") {
-            if let Some(key) = self.key.as_mut() {
-                let key = key.get(&p.info_hash, p.event, now);
-                q = q.replace("{key}", &self.encoder.encode(&key));
-            }
+        if q.contains("{key}")
+            && let Some(key) = self.key.as_mut()
+        {
+            let key = key.get(&p.info_hash, p.event, now);
+            q = q.replace("{key}", &self.encoder.encode(&key));
         }
         let q = q.strip_prefix('&').unwrap_or(&q);
         q.strip_suffix('&').unwrap_or(q).to_owned()
@@ -296,7 +296,10 @@ mod tests {
 
     #[test]
     fn renders_header_placeholders() {
-        assert_eq!(profile().headers(), &[("User-Agent".to_owned(), "Test/1.0 (Linux; en-US; Java 21.0.4)".to_owned())]);
+        assert_eq!(
+            profile().headers(),
+            &[("User-Agent".to_owned(), "Test/1.0 (Linux; en-US; Java 21.0.4)".to_owned())]
+        );
     }
 
     #[test]
@@ -304,7 +307,8 @@ mod tests {
         let json = TEST_PROFILE
             .replace("-AB1234-[x]{12}", "-UT354S-(\u{d2})[x]{11}")
             .replace(r#""shouldUrlEncode": false"#, r#""shouldUrlEncode": true"#);
-        let q = ClientProfile::from_json("t", json.as_bytes()).unwrap().build_query(&params(Event::None), Instant::now());
+        let q =
+            ClientProfile::from_json("t", json.as_bytes()).unwrap().build_query(&params(Event::None), Instant::now());
         assert!(q.contains("peer_id=-UT354S-%d2xxxxxxxxxxx&"));
     }
 
@@ -341,7 +345,12 @@ mod tests {
         sort_profiles(&mut names);
         assert_eq!(
             names,
-            ["deluge-2.1.1.client", "qbittorrent-5.10.0.client", "qbittorrent-5.2.4.client", "qbittorrent-4.6.7.client"]
+            [
+                "deluge-2.1.1.client",
+                "qbittorrent-5.10.0.client",
+                "qbittorrent-5.2.4.client",
+                "qbittorrent-4.6.7.client"
+            ]
         );
     }
 }

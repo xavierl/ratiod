@@ -21,7 +21,7 @@ async fn announces_started_then_regular_with_growing_uploaded() {
     assert_eq!(reqs[0]["downloaded"], "0");
     assert_eq!(reqs[0]["left"], "0");
     assert_eq!(reqs[0]["port"], "49200");
-    assert!(reqs[1].get("event").is_none(), "a regular announce has no event");
+    assert!(!reqs[1].contains_key("event"), "a regular announce has no event");
     assert!(reqs[1]["uploaded"].parse::<u64>().unwrap() > 0);
     let snap = h.engine.snapshot();
     assert!(snap.running);
@@ -110,11 +110,9 @@ async fn respects_simultaneous_seed_and_promotes_queue_on_delete() {
     let tracker = FakeTracker::start(ok(60, 5, 5)).await;
     let mut config = test_config();
     config.simultaneous_seed = 1;
-    let h = harness(
-        config,
-        &[("a.torrent", torrent("a", 1000, &tracker)), ("b.torrent", torrent("b", 1000, &tracker))],
-    )
-    .await;
+    let h =
+        harness(config, &[("a.torrent", torrent("a", 1000, &tracker)), ("b.torrent", torrent("b", 1000, &tracker))])
+            .await;
     h.engine.start();
     wait_for("a seeding", || seeding(&h)).await;
     let snap = h.engine.snapshot();

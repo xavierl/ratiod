@@ -33,13 +33,8 @@ pub struct Bandwidth {
 
 impl Bandwidth {
     pub fn new(min_kbps: u64, max_kbps: u64) -> Self {
-        let mut bandwidth = Self {
-            min_bps: 0,
-            max_bps: 0,
-            global_bps: 0,
-            weights: HashMap::new(),
-            speeds: HashMap::new(),
-        };
+        let mut bandwidth =
+            Self { min_bps: 0, max_bps: 0, global_bps: 0, weights: HashMap::new(), speeds: HashMap::new() };
         bandwidth.set_rates(min_kbps, max_kbps);
         bandwidth
     }

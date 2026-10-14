@@ -97,10 +97,8 @@ impl Library {
     }
 
     pub fn archive(&self, path: &Path) -> io::Result<PathBuf> {
-        let name = path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "torrent.torrent".to_owned());
+        let name =
+            path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "torrent.torrent".to_owned());
         let target = unique_path(&self.archive_dir, &name);
         fs::rename(path, &target)?;
         Ok(target)
@@ -133,12 +131,10 @@ fn is_torrent_file(path: &Path) -> bool {
 /// Keeps only the base name, replaces risky characters and forces `.torrent`.
 pub fn sanitize_filename(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or_default();
-    let stem = if base.to_ascii_lowercase().ends_with(".torrent") { &base[..base.len() - ".torrent".len()] } else { base };
-    let clean: String = stem
-        .chars()
-        .map(|c| if c.is_alphanumeric() || " ._-()[]".contains(c) { c } else { '_' })
-        .take(150)
-        .collect();
+    let stem =
+        if base.to_ascii_lowercase().ends_with(".torrent") { &base[..base.len() - ".torrent".len()] } else { base };
+    let clean: String =
+        stem.chars().map(|c| if c.is_alphanumeric() || " ._-()[]".contains(c) { c } else { '_' }).take(150).collect();
     let clean = clean.trim_matches(|c: char| c == '.' || c == ' ');
     format!("{}.torrent", if clean.is_empty() { "torrent" } else { clean })
 }
@@ -274,10 +270,11 @@ mod tests {
     fn watch_reports_changes() {
         let (_dir, lib) = library();
         let (tx, rx) = std::sync::mpsc::channel();
-        let _watcher = lib.watch(move || {
-            let _ = tx.send(());
-        })
-        .unwrap();
+        let _watcher = lib
+            .watch(move || {
+                let _ = tx.send(());
+            })
+            .unwrap();
         fs::write(lib.torrents_dir().join("new.torrent"), torrent_file("n", 1, "http://t/a")).unwrap();
         rx.recv_timeout(Duration::from_secs(5)).expect("a change notification");
     }

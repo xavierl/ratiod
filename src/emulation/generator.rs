@@ -126,10 +126,10 @@ impl Generator {
     }
 
     fn global(&mut self, now: Instant, timed: bool) -> Vec<u8> {
-        if let Some((value, generated_at)) = &self.current {
-            if !timed || now.duration_since(*generated_at) < self.refresh_every {
-                return value.clone();
-            }
+        if let Some((value, generated_at)) = &self.current
+            && (!timed || now.duration_since(*generated_at) < self.refresh_every)
+        {
+            return value.clone();
         }
         let value = generate(&self.algorithm, self.casing);
         self.current = Some((value.clone(), now));
@@ -156,9 +156,7 @@ mod tests {
     const B: InfoHash = [2; 20];
 
     fn generator(refresh_on: &str, extra: &str) -> Generator {
-        let json = format!(
-            r#"{{"algorithm":{{"type":"HASH","length":16}},"refreshOn":"{refresh_on}"{extra}}}"#
-        );
+        let json = format!(r#"{{"algorithm":{{"type":"HASH","length":16}},"refreshOn":"{refresh_on}"{extra}}}"#);
         Generator::new(&serde_json::from_str(&json).unwrap()).unwrap()
     }
 

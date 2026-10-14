@@ -79,10 +79,10 @@ fn http_trackers(root: &Value<'_>) -> Vec<String> {
             }
         }
     }
-    if urls.is_empty() {
-        if let Some(url) = root.get("announce").and_then(Value::as_str) {
-            urls.push(url.trim().to_owned());
-        }
+    if urls.is_empty()
+        && let Some(url) = root.get("announce").and_then(Value::as_str)
+    {
+        urls.push(url.trim().to_owned());
     }
     let mut seen = HashSet::new();
     urls.into_iter()

@@ -7,8 +7,8 @@ use std::time::Duration;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Limited};
 use hyper_rustls::HttpsConnector;
-use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::client::legacy::Client;
+use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use thiserror::Error;
 
@@ -80,17 +80,15 @@ impl HttpClient {
     pub fn new() -> Self {
         // Ignore the error: a provider may already be installed by another client.
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let https = hyper_rustls::HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_http1()
-            .build();
+        let https =
+            hyper_rustls::HttpsConnectorBuilder::new().with_webpki_roots().https_or_http().enable_http1().build();
         let client = Client::builder(TokioExecutor::new()).http1_title_case_headers(true).build(https);
         Self { client }
     }
 
     pub async fn announce(&self, url: &str, headers: &[(String, String)]) -> Result<AnnounceResponse, AnnounceError> {
-        let body = tokio::time::timeout(TIMEOUT, self.fetch(url, headers)).await.map_err(|_| AnnounceError::Timeout)??;
+        let body =
+            tokio::time::timeout(TIMEOUT, self.fetch(url, headers)).await.map_err(|_| AnnounceError::Timeout)??;
         parse_response(&body)
     }
 

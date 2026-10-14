@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use axum::Router;
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::Router;
 
 use ratiod::config::AppConfig;
 use ratiod::engine::{self, EngineDeps, EngineHandle, Timing};
@@ -40,9 +40,7 @@ impl FakeTracker {
     pub async fn start(behavior: Behavior) -> Self {
         let requests: Requests = Arc::default();
         let behavior = Arc::new(Mutex::new(behavior));
-        let app = Router::new()
-            .route("/announce", get(announce))
-            .with_state((requests.clone(), behavior.clone()));
+        let app = Router::new().route("/announce", get(announce)).with_state((requests.clone(), behavior.clone()));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/announce", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

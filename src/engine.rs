@@ -7,16 +7,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tokio::sync::{mpsc, oneshot, watch, Semaphore};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use crate::bandwidth::{uploaded_during, Bandwidth};
+use crate::bandwidth::{Bandwidth, uploaded_during};
 use crate::config::{AppConfig, ConfigError};
 use crate::emulation::{self, AnnounceParams, ClientProfile, Event};
 use crate::library::Library;
 use crate::torrent::{InfoHash, MockedTorrent};
-use crate::tracker::{announce_url, AnnounceError, AnnounceResponse, HttpClient};
+use crate::tracker::{AnnounceError, AnnounceResponse, HttpClient, announce_url};
 
 const MAX_CONCURRENT_ANNOUNCES: usize = 20;
 
@@ -327,7 +327,9 @@ impl Engine {
         for t in &stopping {
             if t.next_event != Event::Started {
                 let tracker = current_tracker(t);
-                if let Some(handle) = self.send_announce(t.torrent.info_hash, tracker, Event::Stopped, t.uploaded, false) {
+                if let Some(handle) =
+                    self.send_announce(t.torrent.info_hash, tracker, Event::Stopped, t.uploaded, false)
+                {
                     pending.push(handle);
                 }
             }
@@ -459,12 +461,8 @@ impl Engine {
     }
 
     fn dispatch_due(&mut self, now: Instant) {
-        let due: Vec<InfoHash> = self
-            .active
-            .iter()
-            .filter(|(_, t)| t.next_announce.is_some_and(|at| at <= now))
-            .map(|(h, _)| *h)
-            .collect();
+        let due: Vec<InfoHash> =
+            self.active.iter().filter(|(_, t)| t.next_announce.is_some_and(|at| at <= now)).map(|(h, _)| *h).collect();
         for info_hash in due {
             let Some(t) = self.active.get_mut(&info_hash) else { continue };
             t.next_announce = None;
@@ -493,10 +491,8 @@ impl Engine {
         Some(tokio::spawn(async move {
             let _permit = permits.acquire_owned().await;
             let result = http.announce(&url, &headers).await;
-            if report {
-                if let Some(tx) = reply_to.upgrade() {
-                    let _ = tx.send(Command::AnnounceDone { info_hash, event, uploaded, result });
-                }
+            if report && let Some(tx) = reply_to.upgrade() {
+                let _ = tx.send(Command::AnnounceDone { info_hash, event, uploaded, result });
             }
         }))
     }
