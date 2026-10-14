@@ -185,7 +185,8 @@ cd web && npm run dev              # UI sur http://localhost:5173 (backend : car
 ```
 
 **Publier une version** : mets à jour `version` dans `Cargo.toml`, puis pousse un tag `vX.Y.Z`
-(`git tag v0.2.0 && git push origin v0.2.0`). Le workflow `.github/workflows/release.yml` construit l'interface,
+(`git tag v0.2.0 && git push origin v0.2.0`), ou lance le workflow **Release** depuis l'onglet Actions de
+GitHub en indiquant la version (`v0.2.0`). Le workflow `.github/workflows/release.yml` construit l'interface,
 lance les tests, compile les binaires Linux (x86_64, aarch64, statiques musl) et Windows (x86_64), puis publie
 la release avec les paquets.
 
