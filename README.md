@@ -7,6 +7,24 @@ une interface web moderne, pas d'authentification (usage sur réseau local).
 > **Avertissement** (repris de Joal) : ratiod n'est pas conçu pour aider à télécharger du contenu illégal.
 > Respecte la loi de ton pays et les règles de tes trackers.
 
+## Aperçu
+
+![Tableau de bord ratiod](docs/screenshots/dashboard-light.png)
+
+<table>
+  <tr>
+    <td width="62%"><img src="docs/screenshots/dashboard-dark.png" alt="Tableau de bord en thème sombre"></td>
+    <td><img src="docs/screenshots/mobile.png" alt="Affichage mobile"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Thème sombre (suit le réglage du système)</sub></td>
+    <td align="center"><sub>Sur mobile, la liste passe en cartes</sub></td>
+  </tr>
+</table>
+
+![Panneau de réglages](docs/screenshots/settings.png)
+<p align="center"><sub>Réglages : débit simulé, nombre de torrents seedés, client émulé (95 profils), ratio cible</sub></p>
+
 ## Démarrage sur un NAS (Docker Compose)
 
 Prérequis : Docker avec le plugin Compose (`docker compose version`). L'image est construite localement à partir
