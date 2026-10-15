@@ -61,11 +61,13 @@ Au premier lancement :
 ratiod est **portable** : ses données sont dans le dossier `data` créé à côté de `ratiod.exe` (déplace le
 dossier entier pour déplacer l'installation). Une installation v0.1.0 garde son dossier `%APPDATA%\ratiod`
 tant que `data` n'existe pas à côté de l'exe ; si le dossier de l'exe n'est pas modifiable (par exemple
-`Program Files`), `%APPDATA%\ratiod` est utilisé. Les logs sont dans `data\ratiod.log` (recréé à chaque
-lancement) puisqu'il n'y a plus de console.
+`Program Files`), `%APPDATA%\ratiod` est utilisé. Les logs sont dans le dossier de données
+(`data\ratiod.log` à côté de l'exe, ou `%APPDATA%\ratiod\ratiod.log` selon la règle ci-dessus), recréés à
+chaque lancement puisqu'il n'y a plus de console.
 
 `ratiod.exe --headless` garde l'ancien comportement serveur, sans fenêtre ni icône (l'interface s'ouvre alors
-dans ton navigateur, comme avant).
+dans ton navigateur, comme avant). Réservé à un usage avancé : il n'y a pas de console, donc pas de `Ctrl+C` ;
+il ne s'arrête qu'en terminant le processus (gestionnaire des tâches), **sans** annonces `stopped` aux trackers.
 
 Pour lancer ratiod à l'ouverture de session : `Win+R`, tape `shell:startup`, et crée dans ce dossier un
 raccourci vers `ratiod.exe`.

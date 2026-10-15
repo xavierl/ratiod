@@ -11,10 +11,14 @@ use std::time::Duration;
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::platform::windows::WindowExtWindows;
 use tao::window::{Icon as WindowIcon, WindowBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    ASFW_ANY, AllowSetForegroundWindow, MB_ICONERROR, MB_OK, MessageBoxW, SetForegroundWindow,
+};
 
 use crate::config::Settings;
 use crate::engine::EngineHandle;
@@ -97,7 +101,7 @@ pub fn run() -> ExitCode {
         .build(&event_loop)
     {
         Ok(window) => window,
-        Err(error) => return fatal(&format!("Impossible de créer la fenêtre :\n\n{error}")),
+        Err(error) => return fail(&runtime, &engine, &format!("Impossible de créer la fenêtre :\n\n{error}")),
     };
     // No drag-and-drop handler on purpose: wry would replace WebView2's own handling, which is what
     // delivers HTML5 `dragenter`/`drop` events (with the files) to the page.
@@ -107,10 +111,14 @@ pub fn run() -> ExitCode {
         Ok(webview) => webview,
         Err(error) => {
             tracing::error!("cannot create the webview: {error}");
-            return fatal(&format!(
-                "ratiod a besoin de Microsoft WebView2 pour afficher son interface, et il est introuvable ou \
+            return fail(
+                &runtime,
+                &engine,
+                &format!(
+                    "ratiod a besoin de Microsoft WebView2 pour afficher son interface, et il est introuvable ou \
                  inutilisable.\n\nInstalle-le depuis :\n{WEBVIEW2_DOWNLOAD}\n\n({error})"
-            ));
+                ),
+            );
         }
     };
 
@@ -123,7 +131,9 @@ pub fn run() -> ExitCode {
     }
     let icon = match tray_icon::Icon::from_rgba(crate::icon::rgba(32), 32, 32) {
         Ok(icon) => icon,
-        Err(error) => return fatal(&format!("Icône de la zone de notification invalide :\n\n{error}")),
+        Err(error) => {
+            return fail(&runtime, &engine, &format!("Icône de la zone de notification invalide :\n\n{error}"));
+        }
     };
     let tray = match TrayIconBuilder::new()
         .with_menu(Box::new(menu))
@@ -133,7 +143,13 @@ pub fn run() -> ExitCode {
         .build()
     {
         Ok(tray) => tray,
-        Err(error) => return fatal(&format!("Impossible de créer l'icône de la zone de notification :\n\n{error}")),
+        Err(error) => {
+            return fail(
+                &runtime,
+                &engine,
+                &format!("Impossible de créer l'icône de la zone de notification :\n\n{error}"),
+            );
+        }
     };
 
     let menu_proxy = proxy.clone();
@@ -152,6 +168,11 @@ pub fn run() -> ExitCode {
             window.set_visible(true);
             window.set_minimized(false);
             window.set_focus();
+            // set_focus alone is often refused by Windows' foreground lock (the taskbar button just flashes).
+            // SAFETY: the HWND belongs to the live window owned by this closure.
+            unsafe {
+                SetForegroundWindow(window.hwnd() as HWND);
+            }
         };
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => window.set_visible(false),
@@ -203,7 +224,15 @@ fn serve(
                     url: running.url.clone(),
                     runtime: handle,
                 });
-                let _ = quit.await;
+                let mut running = running;
+                tokio::select! {
+                    _ = quit => {}
+                    result = &mut running.server => match result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::error!("HTTP server failed: {error}"),
+                        Err(error) => tracing::error!("HTTP server crashed: {error}"),
+                    },
+                }
                 drop(running);
             }
             Err(error) => {
@@ -216,6 +245,11 @@ fn serve(
 /// The UI port is taken: a running ratiod gets its window back, anything else is an error.
 fn address_in_use(settings: &Settings) -> ExitCode {
     let addr = server::loopback_addr(settings.bind);
+    // This process is the foreground one: let the running instance take the foreground in turn.
+    // SAFETY: plain Win32 call without pointers.
+    unsafe {
+        AllowSetForegroundWindow(ASFW_ANY);
+    }
     if instance::notify_running(addr) {
         return ExitCode::SUCCESS;
     }
@@ -224,6 +258,14 @@ fn address_in_use(settings: &Settings) -> ExitCode {
          avec la variable d'environnement RATIOD_BIND.",
         settings.bind.port()
     ))
+}
+
+/// Fatal error once the server runs: stop the engine first so the trackers get their `stopped` announces.
+fn fail(runtime: &tokio::runtime::Handle, engine: &EngineHandle, text: &str) -> ExitCode {
+    if runtime.block_on(tokio::time::timeout(QUIT_TIMEOUT, engine.shutdown())).is_err() {
+        tracing::warn!("the engine did not stop in time");
+    }
+    fatal(text)
 }
 
 fn fatal(text: &str) -> ExitCode {
