@@ -10,10 +10,15 @@ use common::*;
 use ratiod::api::{self, AppState};
 
 fn app(h: &Harness) -> Router {
+    app_with(h, None)
+}
+
+fn app_with(h: &Harness, on_show: Option<std::sync::Arc<dyn Fn() + Send + Sync>>) -> Router {
     api::router(AppState {
         engine: h.engine.clone(),
         library: h.library.clone(),
         clients_dir: h.dir.path().join("clients"),
+        on_show,
     })
 }
 
@@ -144,4 +149,26 @@ async fn static_fallback() {
         "index is served when built, 503 otherwise: {}",
         page.status()
     );
+}
+
+#[tokio::test]
+async fn desktop_show_calls_the_callback_in_desktop_mode() {
+    let h = harness(test_config(), &[]).await;
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = calls.clone();
+    let on_show: std::sync::Arc<dyn Fn() + Send + Sync> =
+        std::sync::Arc::new(move || _ = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+    let response = app_with(&h, Some(on_show))
+        .oneshot(Request::post("/api/desktop/show").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn desktop_show_is_404_outside_desktop_mode() {
+    let h = harness(test_config(), &[]).await;
+    let response = app(&h).oneshot(Request::post("/api/desktop/show").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

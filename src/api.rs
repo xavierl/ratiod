@@ -2,6 +2,7 @@
 
 use std::convert::Infallible;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
@@ -30,6 +31,8 @@ pub struct AppState {
     pub engine: EngineHandle,
     pub library: Library,
     pub clients_dir: PathBuf,
+    /// Brings the desktop window to the front; `None` outside the Windows desktop mode.
+    pub on_show: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -41,9 +44,21 @@ pub fn router(state: AppState) -> Router {
         .route("/api/clients", get(clients))
         .route("/api/torrents", post(upload))
         .route("/api/torrents/{info_hash}", delete(delete_torrent))
+        .route("/api/desktop/show", post(desktop_show))
         .fallback(static_files)
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024))
         .with_state(state)
+}
+
+/// Used by a second launch of the desktop app to wake up the first one.
+async fn desktop_show(State(state): State<AppState>) -> StatusCode {
+    match &state.on_show {
+        Some(show) => {
+            show();
+            StatusCode::NO_CONTENT
+        }
+        None => StatusCode::NOT_FOUND,
+    }
 }
 
 async fn events(State(state): State<AppState>) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {

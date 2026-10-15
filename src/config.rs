@@ -128,16 +128,49 @@ fn is_true(value: &str) -> bool {
     !matches!(value.trim().to_ascii_lowercase().as_str(), "false" | "0" | "no" | "off")
 }
 
-/// Per-user data folder: `%APPDATA%\ratiod` on Windows, `$XDG_DATA_HOME/ratiod` or
-/// `~/.local/share/ratiod` elsewhere; `./data` if none of these is known.
+/// Default data folder: on Windows the portable rule of [`choose_windows_data_dir`]; elsewhere
+/// `$XDG_DATA_HOME/ratiod` or `~/.local/share/ratiod`; `./data` if none of these is known.
 fn default_data_dir(get: &impl Fn(&str) -> Option<String>) -> PathBuf {
     let non_empty = |key: &str| get(key).filter(|v| !v.is_empty()).map(PathBuf::from);
-    let base = if cfg!(windows) {
-        non_empty("APPDATA")
-    } else {
-        non_empty("XDG_DATA_HOME").or_else(|| non_empty("HOME").map(|home| home.join(".local").join("share")))
-    };
+    if cfg!(windows) {
+        let exe_dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf));
+        let appdata = non_empty("APPDATA").map(|base| base.join("ratiod"));
+        return choose_windows_data_dir(exe_dir.as_deref(), appdata.as_deref(), |p| p.exists(), dir_is_writable);
+    }
+    let base = non_empty("XDG_DATA_HOME").or_else(|| non_empty("HOME").map(|home| home.join(".local").join("share")));
     base.map_or_else(|| PathBuf::from("data"), |base| base.join("ratiod"))
+}
+
+/// Portable data folder on Windows. In order: the "data" folder next to the exe if it exists; the per-user
+/// folder (`appdata`, i.e. "%APPDATA%/ratiod", v0.1.0 installs) if it exists; "data" next to the exe if the
+/// exe folder is writable; the per-user folder otherwise. `data` when neither location is known.
+pub fn choose_windows_data_dir(
+    exe_dir: Option<&Path>,
+    appdata: Option<&Path>,
+    exists: impl Fn(&Path) -> bool,
+    writable: impl Fn(&Path) -> bool,
+) -> PathBuf {
+    let portable = exe_dir.map(|dir| dir.join("data"));
+    if let Some(dir) = portable.as_ref().filter(|dir| exists(dir)) {
+        return dir.clone();
+    }
+    if let Some(dir) = appdata.filter(|dir| exists(dir)) {
+        return dir.to_path_buf();
+    }
+    if let (Some(exe_dir), Some(dir)) = (exe_dir, portable.as_ref())
+        && writable(exe_dir)
+    {
+        return dir.clone();
+    }
+    appdata.map(Path::to_path_buf).or(portable).unwrap_or_else(|| PathBuf::from("data"))
+}
+
+/// True when a file can be created in `dir` (read-only media, Program Files without admin rights…).
+fn dir_is_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".ratiod-write-test-{}", std::process::id()));
+    let ok = std::fs::File::create(&probe).is_ok();
+    let _ = std::fs::remove_file(&probe);
+    ok
 }
 
 #[cfg(test)]
@@ -220,11 +253,17 @@ mod tests {
     fn settings_defaults_and_overrides() {
         let empty = Settings::from_lookup(|_| None).unwrap();
         assert_eq!(empty.bind, "127.0.0.1:5081".parse().unwrap());
-        assert_eq!(empty.data_dir, PathBuf::from("data"));
+        // Windows: the portable folder next to the exe (this test binary) since no APPDATA is known.
+        let expected_data = if cfg!(windows) {
+            std::env::current_exe().unwrap().parent().unwrap().join("data")
+        } else {
+            PathBuf::from("data")
+        };
+        assert_eq!(empty.data_dir, expected_data);
         assert!((49152..=65534).contains(&empty.peer_port));
         assert!(empty.autostart);
         assert_eq!(empty.open_browser, cfg!(windows));
-        assert_eq!(empty.config_path(), PathBuf::from("data").join("config.json"));
+        assert_eq!(empty.config_path(), expected_data.join("config.json"));
 
         let env: HashMap<&str, &str> = HashMap::from([
             ("RATIOD_BIND", "0.0.0.0:8080"),
@@ -248,7 +287,10 @@ mod tests {
             HashMap::from([("HOME", "/home/me"), ("APPDATA", r"C:\Users\me\AppData\Roaming")]);
         let s = Settings::from_lookup(|k| env.get(k).map(|v| v.to_string())).unwrap();
         if cfg!(windows) {
-            assert_eq!(s.data_dir, PathBuf::from(r"C:\Users\me\AppData\Roaming").join("ratiod"));
+            // Portable rule: next to the exe, or the per-user folder (see the choose_windows_data_dir tests).
+            let appdata = PathBuf::from(r"C:\Users\me\AppData\Roaming").join("ratiod");
+            let exe_data = std::env::current_exe().unwrap().parent().unwrap().join("data");
+            assert!(s.data_dir == exe_data || s.data_dir == appdata, "{:?}", s.data_dir);
         } else {
             assert_eq!(s.data_dir, PathBuf::from("/home/me/.local/share/ratiod"));
             let xdg = Settings::from_lookup(|k| match k {
@@ -259,6 +301,44 @@ mod tests {
             .unwrap();
             assert_eq!(xdg.data_dir, PathBuf::from("/xdg/ratiod"));
         }
+    }
+
+    fn dirs(existing: &[&str]) -> impl Fn(&Path) -> bool {
+        let existing: Vec<PathBuf> = existing.iter().map(PathBuf::from).collect();
+        move |p| existing.iter().any(|e| e == p)
+    }
+
+    const EXE: &str = "C:/Apps/ratiod";
+    const APPDATA: &str = "C:/Users/me/AppData/Roaming/ratiod";
+
+    fn choose(existing: &[&str], writable: bool) -> PathBuf {
+        choose_windows_data_dir(Some(Path::new(EXE)), Some(Path::new(APPDATA)), dirs(existing), |_| writable)
+    }
+
+    #[test]
+    fn windows_data_dir_prefers_an_existing_portable_folder() {
+        let portable = Path::new(EXE).join("data");
+        assert_eq!(choose(&[portable.to_str().unwrap(), APPDATA], false), portable);
+    }
+
+    #[test]
+    fn windows_data_dir_keeps_an_existing_v0_1_0_install() {
+        assert_eq!(choose(&[APPDATA], true), PathBuf::from(APPDATA));
+    }
+
+    #[test]
+    fn windows_data_dir_creates_next_to_a_writable_exe() {
+        assert_eq!(choose(&[], true), Path::new(EXE).join("data"));
+    }
+
+    #[test]
+    fn windows_data_dir_falls_back_to_appdata_when_the_exe_folder_is_read_only() {
+        assert_eq!(choose(&[], false), PathBuf::from(APPDATA));
+    }
+
+    #[test]
+    fn windows_data_dir_without_any_known_location() {
+        assert_eq!(choose_windows_data_dir(None, None, |_| false, |_| true), PathBuf::from("data"));
     }
 
     #[test]

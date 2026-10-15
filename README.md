@@ -43,9 +43,14 @@ privé : il faut être connecté à GitHub pour les télécharger). `SHA256SUMS.
 ### Windows
 
 1. Télécharge et décompresse `ratiod-<version>-windows-x86_64.zip` où tu veux (par exemple `Documents\ratiod`).
-2. Double-clique sur `ratiod.exe`. Une fenêtre de console affiche les logs et l'interface s'ouvre dans ton
-   navigateur. **Garde la fenêtre ouverte** : la fermer arrête ratiod (`Ctrl+C` l'arrête proprement, en
-   prévenant les trackers).
+2. Double-clique sur `ratiod.exe` : l'interface s'ouvre directement dans sa propre fenêtre, sans console ni
+   navigateur. **Fermer la fenêtre la masque seulement** : ratiod continue de seeder, son icône reste dans la
+   zone de notification (près de l'horloge ; clique sur `^` si elle est masquée). Un clic gauche sur l'icône
+   rouvre la fenêtre ; le clic droit propose « Ouvrir ratiod » et « Quitter ». **« Quitter » arrête
+   proprement ratiod** (annonces `stopped` aux trackers, 5 s au plus). Relancer `ratiod.exe` alors qu'il tourne
+   déjà ramène simplement sa fenêtre au premier plan.
+3. Windows 10/11 fournit normalement **Microsoft WebView2**, qui affiche la fenêtre. S'il manque, ratiod
+   l'indique et donne le lien de téléchargement : https://go.microsoft.com/fwlink/p/?LinkId=2124703
 
 Au premier lancement :
 - **SmartScreen** (« Windows a protégé votre ordinateur ») : l'exécutable n'est pas signé. Clique sur
@@ -53,7 +58,16 @@ Au premier lancement :
 - **Pare-feu Windows** : il demande d'autoriser ratiod sur le réseau. C'est le port pair annoncé aux trackers ;
   autorise au moins les réseaux privés. L'interface web, elle, reste limitée à `127.0.0.1`.
 
-Les données sont dans `%APPDATA%\ratiod` (colle ce chemin dans la barre d'adresse de l'explorateur).
+ratiod est **portable** : ses données sont dans le dossier `data` créé à côté de `ratiod.exe` (déplace le
+dossier entier pour déplacer l'installation). Une installation v0.1.0 garde son dossier `%APPDATA%\ratiod`
+tant que `data` n'existe pas à côté de l'exe ; si le dossier de l'exe n'est pas modifiable (par exemple
+`Program Files`), `%APPDATA%\ratiod` est utilisé. Les logs sont dans le dossier de données
+(`data\ratiod.log` à côté de l'exe, ou `%APPDATA%\ratiod\ratiod.log` selon la règle ci-dessus), recréés à
+chaque lancement puisqu'il n'y a plus de console.
+
+`ratiod.exe --headless` garde l'ancien comportement serveur, sans fenêtre ni icône (l'interface s'ouvre alors
+dans ton navigateur, comme avant). Réservé à un usage avancé : il n'y a pas de console, donc pas de `Ctrl+C` ;
+il ne s'arrête qu'en terminant le processus (gestionnaire des tâches), **sans** annonces `stopped` aux trackers.
 
 Pour lancer ratiod à l'ouverture de session : `Win+R`, tape `shell:startup`, et crée dans ce dossier un
 raccourci vers `ratiod.exe`.
@@ -137,7 +151,7 @@ compte automatiquement). Le dossier de données dépend de l'installation :
 
 | Installation | Dossier de données |
 |---|---|
-| Windows | `%APPDATA%\ratiod` |
+| Windows | `data` à côté de `ratiod.exe` (ou `%APPDATA%\ratiod`, voir [Windows](#windows)) |
 | Linux | `~/.local/share/ratiod` (ou `$XDG_DATA_HOME/ratiod`) |
 | Docker | `./data` à côté de `docker-compose.yml` |
 
@@ -163,11 +177,11 @@ Les réglages de seed (`config.json`) se modifient depuis l'interface. Variables
 | `RATIOD_DATA_DIR` | voir [Utilisation](#utilisation) | `/data` | dossier de données |
 | `RATIOD_PEER_PORT` | aléatoire (49152–65534) | `49200` | port annoncé aux trackers |
 | `RATIOD_AUTOSTART` | `true` | `true` | démarre le seed au lancement |
-| `RATIOD_OPEN_BROWSER` | `true` sous Windows, sinon `false` | `false` | ouvre l'interface au lancement |
+| `RATIOD_OPEN_BROWSER` | `true` sous Windows, sinon `false` | `false` | ouvre l'interface dans le navigateur au lancement (mode serveur / `--headless` uniquement) |
 | `RUST_LOG` | `info` | `info` | niveau de logs (`debug` pour voir chaque annonce) |
 
 Sous Windows, pour changer une variable : crée à côté de `ratiod.exe` un fichier `ratiod.bat` contenant par
-exemple `set RATIOD_PEER_PORT=51413` puis `ratiod.exe` sur la ligne suivante, et lance ce fichier.
+exemple `set RATIOD_PEER_PORT=51413` puis `start "" ratiod.exe` sur la ligne suivante, et lance ce fichier.
 
 ## Fonctionnement
 
