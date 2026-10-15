@@ -47,9 +47,46 @@ impl RecoveryPolicy {
     }
 }
 
+/// A rebuild waiting for one of several signals (the old browser process has exited, or a timeout):
+/// only the first signal of the current rebuild fires it, so one crash is rebuilt once.
+#[derive(Debug, Default)]
+pub struct RebuildGate {
+    pending: Option<u64>,
+}
+
+impl RebuildGate {
+    /// Waits for a signal of rebuild `id`, replacing any rebuild still pending.
+    pub fn arm(&mut self, id: u64) {
+        self.pending = Some(id);
+    }
+
+    /// True when the signal of rebuild `id` must trigger it (then the gate closes).
+    pub fn fire(&mut self, id: u64) -> bool {
+        self.pending.take_if(|pending| *pending == id).is_some()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rebuild_fires_once_whatever_signals_it() {
+        let mut gate = RebuildGate::default();
+        assert!(!gate.fire(1), "nothing armed");
+        gate.arm(1);
+        assert!(gate.fire(1), "browser exited");
+        assert!(!gate.fire(1), "the timeout of the same rebuild");
+    }
+
+    #[test]
+    fn signals_of_an_older_rebuild_are_ignored() {
+        let mut gate = RebuildGate::default();
+        gate.arm(1);
+        gate.arm(2);
+        assert!(!gate.fire(1));
+        assert!(gate.fire(2));
+    }
 
     const WINDOW: Duration = Duration::from_secs(60);
 

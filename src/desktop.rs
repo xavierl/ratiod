@@ -19,9 +19,10 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
     COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
-    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, ICoreWebView2Environment, ICoreWebView2Environment5,
 };
-use webview2_com::ProcessFailedEventHandler;
+use webview2_com::{BrowserProcessExitedEventHandler, ProcessFailedEventHandler};
+use windows_core::Interface;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, DestroyWindow, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
@@ -33,7 +34,7 @@ use crate::config::Settings;
 use crate::engine::EngineHandle;
 use crate::instance;
 use crate::locale::pick;
-use crate::recovery::{Decision, RecoveryPolicy};
+use crate::recovery::{Decision, RebuildGate, RecoveryPolicy};
 use crate::server::{self, StartError};
 
 const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
@@ -45,6 +46,8 @@ const BUILD_RETRY_PAUSE: Duration = Duration::from_millis(500);
 /// Display crashes recovered within `RECOVERY_WINDOW` before giving up (a crash loop is not recoverable).
 const MAX_RECOVERIES: usize = 3;
 const RECOVERY_WINDOW: Duration = Duration::from_secs(60);
+/// How long a rebuild waits for WebView2 to report that the crashed browser process is gone.
+const BROWSER_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum UserEvent {
     Menu(MenuEvent),
@@ -54,6 +57,12 @@ enum UserEvent {
     WebViewFailed {
         generation: u64,
         kind: COREWEBVIEW2_PROCESS_FAILED_KIND,
+    },
+    /// The webview number `generation` can be built: the crashed browser process is gone, or waiting for it
+    /// `timed_out`.
+    RebuildReady {
+        generation: u64,
+        timed_out: bool,
     },
 }
 
@@ -239,6 +248,9 @@ pub fn run() -> ExitCode {
     let mut tray = Some(tray);
     let mut quit_tx = Some(quit_tx);
     let mut recovery = RecoveryPolicy::new(MAX_RECOVERIES, RECOVERY_WINDOW);
+    let mut rebuild = RebuildGate::default();
+    // Kept alive until the rebuild, so that its `BrowserProcessExited` event can come.
+    let mut old_environment: Option<ICoreWebView2Environment> = None;
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         let show = || {
@@ -274,8 +286,12 @@ pub fn run() -> ExitCode {
                     RECOVERY_WINDOW.as_secs()
                 );
                 if decision == Decision::GiveUp {
-                    // Stops listening to this webview: no further recovery, no repeated dialog.
+                    // Stops listening to this webview: no further recovery, no repeated dialog. The dead webview
+                    // is closed so the window does not keep it (the dialog explains the empty window).
                     generation += 1;
+                    if let Some(dead) = webview.take() {
+                        close_webview(dead);
+                    }
                     give_up(&url);
                     return;
                 }
@@ -288,21 +304,38 @@ pub fn run() -> ExitCode {
                         }
                     }
                     Repair::Recreate => {
-                        // The old webview's browser process is gone: close it before building a new one in its place.
+                        // A new webview built on the same data folder before the old browser process is fully gone
+                        // attaches to it and dies with it (one crash would count twice): Microsoft's pattern is to
+                        // close the old webview and rebuild once its environment reports the browser process exited.
+                        generation += 1;
+                        rebuild.arm(generation);
                         if let Some(dead) = webview.take() {
+                            old_environment = await_browser_exit(&dead, &proxy, generation);
                             close_webview(dead);
                         }
-                        generation += 1;
-                        match build_webview(&window, &mut web_context, &url, &proxy, generation) {
-                            Ok(rebuilt) => {
-                                tracing::info!("the display has been recreated");
-                                webview = Some(rebuilt);
-                            }
-                            Err(error) => {
-                                tracing::error!("cannot recreate the webview: {error}");
-                                give_up(&url);
-                            }
-                        }
+                        let timeout_proxy = proxy.clone();
+                        let id = generation;
+                        std::thread::spawn(move || {
+                            std::thread::sleep(BROWSER_EXIT_TIMEOUT);
+                            let _ =
+                                timeout_proxy.send_event(UserEvent::RebuildReady { generation: id, timed_out: true });
+                        });
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::RebuildReady { generation: id, timed_out }) if rebuild.fire(id) => {
+                if timed_out {
+                    tracing::warn!("WebView2 did not report the end of its browser process, rebuilding anyway");
+                }
+                drop(old_environment.take());
+                match build_webview(&window, &mut web_context, &url, &proxy, generation) {
+                    Ok(rebuilt) => {
+                        tracing::info!("the display has been recreated");
+                        webview = Some(rebuilt);
+                    }
+                    Err(error) => {
+                        tracing::error!("cannot recreate the webview: {error}");
+                        give_up(&url);
                     }
                 }
             }
@@ -368,6 +401,36 @@ fn watch_failures(webview: &WebView, proxy: EventLoopProxy<UserEvent>, generatio
     if let Err(error) = unsafe { webview.webview().add_ProcessFailed(&handler, &mut token) } {
         tracing::warn!("cannot watch the WebView2 processes: {error}");
     }
+}
+
+/// Asks the dead webview's environment to report when its browser process is completely gone (it does
+/// once the webview is closed), as the rebuild `generation`. Returns the environment, which must be
+/// kept alive until then; `None` when the runtime is too old for this event (the rebuild timeout applies).
+fn await_browser_exit(
+    webview: &WebView,
+    proxy: &EventLoopProxy<UserEvent>,
+    generation: u64,
+) -> Option<ICoreWebView2Environment> {
+    let environment = webview.environment();
+    let environment5 = match environment.cast::<ICoreWebView2Environment5>() {
+        Ok(environment5) => environment5,
+        Err(error) => {
+            tracing::warn!("cannot wait for the end of the WebView2 browser process: {error}");
+            return None;
+        }
+    };
+    let proxy = proxy.clone();
+    let handler = BrowserProcessExitedEventHandler::create(Box::new(move |_, _| {
+        let _ = proxy.send_event(UserEvent::RebuildReady { generation, timed_out: false });
+        Ok(())
+    }));
+    let mut token = 0;
+    // SAFETY: the handler is a live COM object and `token` a valid out pointer.
+    if let Err(error) = unsafe { environment5.add_BrowserProcessExited(&handler, &mut token) } {
+        tracing::warn!("cannot wait for the end of the WebView2 browser process: {error}");
+        return None;
+    }
+    Some(environment)
 }
 
 /// Closes a dead webview. wry destroys its container window only for child webviews: it is destroyed
