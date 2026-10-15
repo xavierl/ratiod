@@ -2,7 +2,7 @@
 
 *Date: 2026-10-14 · Status: approved*
 
-A Rust rewrite of [Joal](https://github.com/anthonyraymond/joal) (Apache 2.0): a fake BitTorrent client that
+A lightweight BitTorrent ratio emulator written in Rust: a fake BitTorrent client that
 announces fake upload to HTTP trackers for `.torrent` files, without transferring anything.
 
 ## 1. Goal and constraints
@@ -15,20 +15,20 @@ announces fake upload to HTTP trackers for `.torrent` files, without transferrin
 
 **Usage context**
 - Runs in **Docker on a NAS**; the UI is used from devices on the LAN.
-- Replaces an existing Joal installation: the config format is free to change, but existing `.client` and
+- Replaces an existing ratio-emulator installation: the config format is free to change, but existing `.client` and
   `.torrent` files must remain reusable.
 - No CI and no image registry: the image is built on the NAS (`docker compose build`).
 
 **Success criteria**
-1. All 95 Joal `.client` profiles load and produce a valid announce request.
-2. For a given profile, the announce request (query + headers) has the same shape as Joal's.
-3. An existing `joal-conf` folder (config.json, clients/, torrents/) works when mounted on `/data`.
+1. All 95 `.client` profiles load and produce a valid announce request.
+2. For a given profile, the announce request (query + headers) has the same shape as the reference implementation's.
+3. An existing configuration folder (config.json, clients/, torrents/) works when mounted on `/data`.
 4. Docker image < 15 MB; idle memory < 30 MB with 200 active torrents.
 5. A `.torrent` dropped into the UI appears in the list and is announced within 3 s if a slot is free.
 
 ## 2. Scope
 
-**Included (Joal parity + approved additions)**
+**Included (feature parity with the previous tool + approved additions)**
 - Global seeding start/stop, **automatic start** on launch (can be disabled).
 - Settings: min/max rate, simultaneous seeds, emulated client, target ratio, keep torrents with 0 leechers.
 - List of active torrents with rate, uploaded amount, seeders/leechers, next announce, errors.
@@ -68,7 +68,7 @@ ratiod/
 │   ├── library.rs       torrents/ + archived/ folders + watcher
 │   ├── engine.rs        orchestrator actor (sole owner of the state)
 │   └── api.rs           axum routes, SSE, embedded static files
-├── clients/             Joal's ~95 .client profiles (embedded)
+├── clients/             the 95 .client profiles (embedded)
 ├── web/                 Svelte app (build → web/dist, embedded)
 ├── Dockerfile
 └── docker-compose.yml
@@ -108,7 +108,7 @@ An upload from the UI follows the same path as a file dropped by hand: a single 
 
 ### 4.1 `config`
 
-**`/data/config.json`**: same keys as Joal, read at startup, rewritten by `PUT /api/config`. If it is missing, it
+**`/data/config.json`**: same keys as before, read at startup, rewritten by `PUT /api/config`. If it is missing, it
 is created with the values below.
 
 | Key | Type | Default | Validation |
@@ -120,7 +120,7 @@ is created with the values below.
 | `keepTorrentWithZeroLeechers` | bool | true | — |
 | `uploadRatioTarget` | f32 | -1 | `-1` (disabled) or > 0 |
 
-The defaults are Joal's. As in Joal, 1 kB = 1000 bytes.
+1 kB = 1000 bytes.
 
 **Environment variables** (not editable from the UI):
 
@@ -143,7 +143,7 @@ The defaults are Joal's. As in Joal, 1 kB = 1000 bytes.
 
 ### 4.3 `emulation`
 
-Loads profiles **in Joal's `.client` format, unmodified**. Embedded profiles (`clients/`, via `rust-embed`) are
+Loads profiles **in the existing `.client` format, unmodified**. Embedded profiles (`clients/`, via `rust-embed`) are
 merged with `/data/clients/*.client`: when names are equal, the file from the volume wins.
 
 **Algorithms** (`algorithm.type` field):
@@ -151,7 +151,7 @@ merged with `/data/clients/*.client`: when names are equal, the file from the vo
 | Type | Used for | Behaviour |
 |---|---|---|
 | `REGEX` | peer_id, key | random string matching `pattern` (`rand_regex`) |
-| `RANDOM_POOL_WITH_CHECKSUM` | peer_id | `prefix` padded to 20 characters: each character is `charactersPool[random byte % base]`, the last one makes the sum of indices a multiple of `base` (same computation as `RandomPoolWithChecksumPeerIdAlgorithm.java`) |
+| `RANDOM_POOL_WITH_CHECKSUM` | peer_id | `prefix` padded to 20 characters: each character is `charactersPool[random byte % base]`, the last one makes the sum of indices a multiple of `base` |
 | `HASH` | key | `length` random uppercase hex characters |
 | `HASH_NO_LEADING_ZERO` | key | same, leading zeros removed |
 | `DIGIT_RANGE_TRANSFORMED_TO_HEX_WITHOUT_LEADING_ZEROES` | key | integer in `[inclusiveLowerBound, inclusiveUpperBound]` → hex without leading zeros |
@@ -173,7 +173,7 @@ merged with `/data/clients/*.client`: when names are equal, the file from the vo
 `encodedHexCase` casing. It applies to the info_hash (20 raw bytes), to the key, and to the peer_id when
 `shouldUrlEncode` is true.
 
-**Query building** (same algorithm as `BitTorrentClient.createRequestQuery`):
+**Query building**:
 1. Collapse consecutive `&` in the template.
 2. Replace `{infohash} {uploaded} {downloaded} {left} {port} {numwant} {peerid} {key}`.
 3. Remove the `…={ip}` / `…={ipv6}` parameters.
@@ -198,14 +198,14 @@ plausible values). An unknown placeholder makes the profile invalid.
   - `seeders = max(0, complete − 1)` (we remove ourselves from the count), `leechers = incomplete`.
 - On failure, move on to the next tracker in the list (cycling). The consecutive failure counter is reset on the
   first success.
-- **Public IP**: not detected. No profile uses `{ip}`, and Joal already removes `{ipv6}` when the detected IP is an
-  IPv4 address (the usual case). This avoids calls to third-party services.
+- **Public IP**: not detected. No profile uses `{ip}`, and `{ipv6}` is only meaningful with an IPv6 address
+  (an IPv4 address is the usual case). This avoids calls to third-party services.
 - **Announced port**: `RATIOD_PEER_PORT`. A `TcpListener` really listens on it (connections accepted then closed)
   so the port looks open.
 
 ### 4.5 `bandwidth`
 
-An exact port of `BandwidthDispatcher`:
+How the fake upload rate is computed:
 - **Global rate** drawn uniformly in `[min, max)` kB/s (or `max` if min = max), redrawn every 20 min and on every
   config change.
 - **Torrent weight**:
@@ -218,7 +218,7 @@ An exact port of `BandwidthDispatcher`:
 - **Torrent rate** = global rate × weight / Σ weights (0 if Σ weights = 0). Recomputed on every seeders/leechers
   update, every torrent added/removed and every global rate redraw.
 - **Accumulation**: on every tick, `uploaded += rate × actual elapsed time` (monotonic clock rather than an assumed
-  interval). The counter starts from 0 each time the torrent is activated, as in Joal.
+  interval). The counter starts from 0 each time the torrent is activated.
 
 ### 4.6 `library`
 
@@ -254,7 +254,7 @@ struct ActiveTorrent {
 ```
 Torrents present in the folder but not active form the **queue**.
 
-**Rules** (identical to Joal):
+**Rules**:
 
 | Situation | Action |
 |---|---|
@@ -344,7 +344,6 @@ A single responsive page, with automatic light/dark theme (`prefers-color-scheme
   - Each algorithm (format, length, no leading zeros, pool checksum).
   - Each refresh policy, with an injectable clock.
   - `build_query`: none/started/stopped events, numwant/numwantOnStop, `{ip}` removal, duplicate `&`.
-  - Vectors taken from Joal's Java tests where they exist.
   - Global test: **all 95 profiles load and produce a query with no placeholder left**.
 - `bandwidth`: weight formula, split, Σ weights = 0 case, accumulation.
 - `library`: add, duplicate, invalid, archiving with a name conflict.
@@ -370,9 +369,9 @@ the request sent.
      `opt-level = "z"` to be weighed against `3`).
   3. `scratch` + CA certificates → `ratiod`, `EXPOSE 5081 49200`, `VOLUME /data`.
 - Example **docker-compose.yml**: `./data:/data` volume, ports `5081` and `49200`, `restart: unless-stopped`.
-- **README**: overview, Docker/compose launch, environment variables, migration from Joal (copy the contents of
-  `joal-conf` into `data/`), usage disclaimer taken from Joal, credits.
-- Apache 2.0 license with a `NOTICE` crediting Joal (Anthony Raymond) and the origin of the `.client` profiles.
+- **README**: overview, Docker/compose launch, environment variables, reusing an existing configuration folder,
+  usage disclaimer, credits.
+- Apache 2.0 license with a `NOTICE` crediting the origin of the `.client` profiles.
 - **Private** GitHub repository `xavierl/ratiod`.
 
 ## 9. Windows desktop mode (added 2026-10-15)

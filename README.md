@@ -1,11 +1,11 @@
 # ratiod
 
-A Rust rewrite of [Joal](https://github.com/anthonyraymond/joal): a fake BitTorrent client that reports
+A lightweight BitTorrent ratio emulator written in Rust: a fake BitTorrent client that reports
 simulated upload to trackers for your `.torrent` files, without transferring anything. A single binary of a few
 MB with its web interface, available for **Windows**, **Linux** and **Docker**. No authentication: the Windows
 and Linux packages only listen on `127.0.0.1`.
 
-> **Disclaimer** (taken from Joal): ratiod is not designed to help you download illegal content.
+> **Disclaimer**: ratiod is not designed to help you download illegal content.
 > Respect the law of your country and the rules of your trackers.
 
 ## Preview
@@ -157,14 +157,15 @@ automatically). The data folder depends on the installation:
 | Linux | `~/.local/share/ratiod` (or `$XDG_DATA_HOME/ratiod`) |
 | Docker | `./data` next to `docker-compose.yml` |
 
-## Migrating from Joal
+## Reusing an existing configuration
 
-Copy the contents of your `joal-conf` folder into the data folder (with ratiod stopped):
+ratiod reads the classic ratio-emulator layout. Copy an existing configuration folder into the data folder
+(with ratiod stopped):
 
 ```
 <data folder>/
-├── config.json        ← used as is (same keys as Joal)
-├── clients/           ← optional: custom .client profiles (Joal's 95 are built in)
+├── config.json        ← used as is (keys: minUploadRate, maxUploadRate, simultaneousSeed, client, …)
+├── clients/           ← optional: custom .client profiles (95 are built in)
 └── torrents/
     └── archived/
 ```

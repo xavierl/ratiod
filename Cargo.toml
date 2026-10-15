@@ -3,7 +3,7 @@ name = "ratiod"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "Lightweight BitTorrent ratio emulator (Rust rewrite of Joal)"
+description = "Lightweight BitTorrent ratio emulator"
 publish = false
 
 [dependencies]
