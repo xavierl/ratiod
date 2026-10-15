@@ -33,8 +33,8 @@ The interface itself is in French.
 There are three ways to run ratiod. Both packages (Windows and Linux) only listen on the machine itself: the
 interface is at **http://127.0.0.1:5081** and cannot be reached from the network.
 
-Packages are on the [**Releases**](https://github.com/xavierl/ratiod/releases/latest) page (the repository is
-private: you must be signed in to GitHub to download them). `SHA256SUMS.txt` lets you verify the files.
+Packages are on the [**Releases**](https://github.com/xavierl/ratiod/releases/latest) page. `SHA256SUMS.txt`
+lets you verify the files.
 
 | Package | System |
 |---|---|
@@ -107,7 +107,7 @@ With Docker, the interface is deliberately exposed on the local network (`0.0.0.
 another device. The image is built from source (no image is published); the first build takes a few minutes.
 
 ```bash
-git clone https://github.com/xavierl/ratiod.git   # private repository: GitHub username + access token
+git clone https://github.com/xavierl/ratiod.git
 cd ratiod
 docker compose up -d --build
 ```
