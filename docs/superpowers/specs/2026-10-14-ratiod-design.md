@@ -376,3 +376,44 @@ inspectant la requête envoyée.
   contenu de `joal-conf` dans `data/`), avertissement d'usage repris de Joal, crédits.
 - Licence Apache 2.0 avec `NOTICE` mentionnant Joal (Anthony Raymond) et l'origine des profils `.client`.
 - Repo GitHub **privé** `xavierl/ratiod`.
+
+## 9. Mode bureau Windows (ajout du 2026-10-15)
+
+**Demande** : sous Windows, `ratiod.exe` doit être une application « portable » simple : aucune fenêtre de terminal,
+et le lancement de l'exe affiche directement l'interface, comme une application de bureau.
+
+**Choix validés** : fenêtre native (pas d'onglet de navigateur) ; fermer la fenêtre la réduit dans la zone de
+notification, le seed continue.
+
+- **Sous-système GUI** : `#![cfg_attr(windows, windows_subsystem = "windows")]` ; aucune console n'apparaît, même en cas
+  d'erreur.
+- **Fenêtre** : `tao` + `wry` (WebView2, présent sur Windows 10/11), titre « ratiod », ~1100×760, taille minimale
+  420×500, icône ratiod. Elle charge l'interface servie par le serveur interne (`http://127.0.0.1:<port>`), qui démarre
+  avant la fenêtre. Le glisser-déposer de `.torrent` doit fonctionner dans la fenêtre.
+- **Zone de notification** (`tray-icon`) : icône ratiod, info-bulle « ratiod » ; clic gauche → affiche et met au premier
+  plan la fenêtre ; menu « Ouvrir ratiod » / « Quitter ». « Quitter » arrête proprement (annonces `stopped`, attente
+  max 5 s comme le Stop) puis ferme l'application. Fermer la fenêtre la masque seulement.
+- **Instance unique** : si le port de l'interface est déjà occupé, l'exe envoie `POST /api/desktop/show` à
+  `127.0.0.1:<port>` ; une réponse 204 signifie qu'un ratiod tourne déjà : sa fenêtre revient au premier plan et la
+  nouvelle instance quitte sans rien afficher. Sinon : boîte de message « port occupé par un autre programme ».
+  La route `/api/desktop/show` n'existe (204) qu'en mode bureau ; ailleurs 404.
+- **Portable — dossier de données** (si `RATIOD_DATA_DIR` n'est pas défini), dans l'ordre :
+  1. `<dossier de l'exe>\data` s'il existe ;
+  2. `%APPDATA%\ratiod` s'il existe (installations v0.1.0 : pas de migration forcée) ;
+  3. `<dossier de l'exe>\data` si le dossier de l'exe est modifiable ;
+  4. `%APPDATA%\ratiod` sinon.
+- **Logs** : sous Windows (bureau ou `--headless`), écrits dans `<data>\ratiod.log` (recréé à chaque lancement), puisqu'il
+  n'y a pas de console.
+- **Erreurs bloquantes** (WebView2 absent, port occupé, dossier de données inaccessible, `config.json` illisible) :
+  boîte de message Windows en français, puis sortie. Pour WebView2 absent, le message donne le lien de téléchargement
+  officiel de Microsoft.
+- **Mode serveur** : `ratiod.exe --headless` garde le comportement serveur (sans fenêtre ni icône) ;
+  `RATIOD_OPEN_BROWSER` ne s'applique qu'à ce mode. Linux et Docker sont inchangés : les dépendances de bureau ne sont
+  compilées que pour Windows.
+- **Icône** : dessinée par le code (carré arrondi vert `#059669`, flèche blanche vers le haut, comme le favicon), utilisée
+  pour la fenêtre, la zone de notification et l'icône de l'exe (générée en `.ico` par `build.rs`, intégrée via
+  `winresource`). Aucun fichier image binaire dans le repo.
+- **Tests** : dessin de l'icône (taille, transparence des coins), choix du dossier de données, route
+  `/api/desktop/show` (204 + rappel appelé / 404), détection d'une instance existante (faux serveur local). Vérification
+  manuelle : exe en sous-système GUI, fenêtre affichée, glisser-déposer, masquage à la fermeture, Quitter, double
+  lancement.
