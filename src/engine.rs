@@ -25,7 +25,7 @@ pub struct Timing {
     pub tick: Duration,
     pub global_refresh: Duration,
     pub rescan: Duration,
-    /// Retry delay until a tracker gives us an interval (Joal: 5 s).
+    /// Retry delay until a tracker gives us an interval (5 s).
     pub initial_interval: Duration,
     pub stop_timeout: Duration,
     pub max_consecutive_fails: u8,

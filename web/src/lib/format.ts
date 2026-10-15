@@ -15,7 +15,7 @@ function decimal(value: number, digits: number): string {
   return value.toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-/** Decimal units (1 ko = 1000 o), like the backend and Joal. */
+/** Decimal units (1 ko = 1000 o), like the backend. */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 o';
   let value = bytes;

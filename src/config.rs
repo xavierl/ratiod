@@ -1,4 +1,4 @@
-//! User configuration (`config.json`, Joal-compatible) and process settings (env).
+//! User configuration (`config.json`, backward-compatible) and process settings (env).
 
 use std::io;
 use std::net::SocketAddr;
@@ -12,7 +12,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
-    /// kB/s (1 kB = 1000 bytes), like Joal.
+    /// kB/s (1 kB = 1000 bytes).
     pub min_upload_rate: u64,
     pub max_upload_rate: u64,
     pub simultaneous_seed: u32,
@@ -66,7 +66,7 @@ impl AppConfig {
     pub fn load_or_create(path: &Path, default_client: &str) -> anyhow::Result<Self> {
         match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("{} is not a valid ratiod/Joal config file", path.display())),
+                .with_context(|| format!("{} is not a valid ratiod config file", path.display())),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 let config = Self::with_client(default_client.to_owned());
                 config.save(path).with_context(|| format!("cannot write {}", path.display()))?;
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_joal() {
+    fn defaults_are_the_documented_values() {
         let c = valid();
         assert_eq!((c.min_upload_rate, c.max_upload_rate, c.simultaneous_seed), (30, 170, 200));
         assert!(c.keep_torrent_with_zero_leechers);
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_existing_joal_config() {
+    fn reads_existing_config() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         std::fs::write(

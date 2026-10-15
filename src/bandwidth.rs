@@ -1,5 +1,5 @@
 //! Fake upload speed: one random global rate shared between torrents by a
-//! leecher-aware weight. Same algorithm as Joal's `BandwidthDispatcher`.
+//! leecher-aware weight.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -8,7 +8,7 @@ use rand::RngExt;
 
 use crate::torrent::InfoHash;
 
-/// Higher weight for torrents with more leechers (Joal `PeersAwareWeightCalculator`).
+/// Higher weight for torrents with more leechers.
 pub fn weight(seeders: u32, leechers: u32) -> f64 {
     if seeders == 0 || leechers == 0 {
         return 0.0;
@@ -110,7 +110,7 @@ mod tests {
     const B: InfoHash = [2; 20];
 
     #[test]
-    fn weight_follows_joal_formula() {
+    fn weight_follows_the_formula() {
         assert_eq!(weight(0, 5), 0.0);
         assert_eq!(weight(5, 0), 0.0);
         // ratio = 5 / 10 = 0.5 → 0.5 * 100 * 0.5 * 5

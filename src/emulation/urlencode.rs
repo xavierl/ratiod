@@ -1,4 +1,4 @@
-//! URL encoder matching Joal's: bytes matching the exclusion pattern are kept,
+//! Configurable URL encoder: bytes matching the exclusion pattern are kept,
 //! every other byte becomes `%xx` in the configured hex case.
 
 use regex::Regex;
@@ -63,7 +63,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_joal_escaped_punctuation() {
+    fn accepts_escaped_punctuation() {
         let e = UrlEncoder::new(r"[A-Za-z0-9_~\(\)\!\.\*-]", false).unwrap();
         assert_eq!(e.encode(b"-qB(x)!*~._"), "-qB(x)!*~._");
         assert_eq!(e.encode(b" /"), "%20%2f");
