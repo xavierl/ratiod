@@ -20,11 +20,11 @@ pub struct MockedTorrent {
 
 #[derive(Debug, Error)]
 pub enum TorrentError {
-    #[error("fichier .torrent illisible : {0}")]
+    #[error("unreadable .torrent file: {0}")]
     Bencode(#[from] BencodeError),
-    #[error("champ `{0}` absent ou invalide")]
+    #[error("field `{0}` missing or invalid")]
     Field(&'static str),
-    #[error("aucun tracker HTTP(S) dans ce torrent")]
+    #[error("no HTTP(S) tracker in this torrent")]
     NoHttpTracker,
 }
 

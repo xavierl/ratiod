@@ -40,10 +40,28 @@ static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{.*?\}").ex
 
 #[derive(Debug, Error)]
 pub enum ProfileError {
-    #[error("profil client « {0} » introuvable")]
+    #[error("client profile '{0}' not found")]
     NotFound(String),
-    #[error("profil client « {name} » invalide : {reason}")]
+    #[error("invalid client profile '{name}': {reason}")]
     Invalid { name: String, reason: String },
+}
+
+impl ProfileError {
+    /// Stable code the UI translates.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotFound(_) => "profile_not_found",
+            Self::Invalid { .. } => "profile_invalid",
+        }
+    }
+
+    /// Profile name, or "name: reason".
+    pub fn detail(&self) -> String {
+        match self {
+            Self::NotFound(name) => name.clone(),
+            Self::Invalid { name, reason } => format!("{name}: {reason}"),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -113,7 +131,7 @@ impl ClientProfile {
             .map_err(invalid)?;
         let sample = peer_id.sample();
         if sample.len() != PEER_ID_LEN {
-            return Err(invalid(format!("le peer_id doit faire {PEER_ID_LEN} octets, pas {}", sample.len())));
+            return Err(invalid(format!("the peer_id must be {PEER_ID_LEN} bytes long, not {}", sample.len())));
         }
         let profile = Self {
             name: name.to_owned(),
@@ -132,7 +150,7 @@ impl ClientProfile {
 
     fn check_query(&self) -> Result<(), String> {
         if self.query.contains("{key}") && self.key.is_none() {
-            return Err("la query utilise {key} mais aucun keyGenerator n'est défini".into());
+            return Err("the query uses {key} but no keyGenerator is defined".into());
         }
         let mut q = IP_PARAM.replace_all(&self.query, "").into_owned();
         q = EVENT_PARAM.replace_all(&q, "").into_owned();
@@ -140,7 +158,7 @@ impl ClientProfile {
             q = q.replace(placeholder, "");
         }
         match PLACEHOLDER.find(&q) {
-            Some(m) => Err(format!("placeholder inconnu {} dans la query", m.as_str())),
+            Some(m) => Err(format!("unknown placeholder {} in the query", m.as_str())),
             None => Ok(()),
         }
     }
@@ -191,7 +209,7 @@ impl ClientProfile {
 fn render_header(value: &str) -> Result<String, String> {
     let value = value.replace("{java}", HEADER_JAVA).replace("{os}", HEADER_OS).replace("{locale}", HEADER_LOCALE);
     match PLACEHOLDER.find(&value) {
-        Some(m) => Err(format!("placeholder inconnu {} dans un header", m.as_str())),
+        Some(m) => Err(format!("unknown placeholder {} in a header", m.as_str())),
         None => Ok(value),
     }
 }

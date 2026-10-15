@@ -17,12 +17,25 @@ pub const MAX_TORRENT_SIZE: usize = 10 * 1024 * 1024;
 pub enum AddError {
     #[error("{0}")]
     Invalid(#[from] TorrentError),
-    #[error("fichier trop volumineux (10 Mo maximum)")]
+    #[error("file too large (10 MB maximum)")]
     TooLarge,
-    #[error("ce torrent est déjà présent")]
+    #[error("this torrent is already present")]
     Duplicate,
-    #[error("écriture impossible : {0}")]
+    #[error("cannot write the file: {0}")]
     Io(#[from] io::Error),
+}
+
+impl AddError {
+    /// Stable code the UI translates.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Invalid(TorrentError::NoHttpTracker) => "no_http_tracker",
+            Self::Invalid(_) => "invalid_torrent",
+            Self::TooLarge => "too_large",
+            Self::Duplicate => "duplicate",
+            Self::Io(_) => "write_failed",
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -206,6 +219,7 @@ mod tests {
     fn add_rejects_invalid_and_oversized_without_writing() {
         let (_dir, lib) = library();
         assert!(matches!(lib.add("bad.torrent", b"<html>"), Err(AddError::Invalid(_))));
+        assert_eq!(lib.add("bad.torrent", b"<html>").unwrap_err().code(), "invalid_torrent");
         assert!(matches!(lib.add("big.torrent", &vec![b'x'; MAX_TORRENT_SIZE + 1]), Err(AddError::TooLarge)));
         assert!(files_in(lib.torrents_dir()).is_empty());
     }

@@ -23,6 +23,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use crate::config::Settings;
 use crate::engine::EngineHandle;
 use crate::instance;
+use crate::locale::pick;
 use crate::server::{self, StartError};
 
 const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
@@ -54,12 +55,15 @@ pub fn error_box(text: &str) {
 pub fn run() -> ExitCode {
     let settings = match Settings::from_env() {
         Ok(settings) => settings,
-        Err(error) => return fatal(&format!("Réglage invalide :\n\n{error:#}")),
+        Err(error) => {
+            return fatal(&pick(format!("Réglage invalide :\n\n{error:#}"), format!("Invalid setting:\n\n{error:#}")));
+        }
     };
     if let Err(error) = std::fs::create_dir_all(&settings.data_dir) {
-        return fatal(&format!(
-            "Impossible d'utiliser le dossier de données {} :\n\n{error}",
-            settings.data_dir.display()
+        let dir = settings.data_dir.display();
+        return fatal(&pick(
+            format!("Impossible d'utiliser le dossier de données {dir} :\n\n{error}"),
+            format!("Cannot use the data folder {dir}:\n\n{error}"),
         ));
     }
     // Checked before the log file is recreated, so that a second launch never wipes the first one's log.
@@ -88,9 +92,17 @@ pub fn run() -> ExitCode {
         Ok(Started::Failed(StartError::AddrInUse(_))) => return address_in_use(&settings),
         Ok(Started::Failed(error)) => {
             tracing::error!("{error}");
-            return fatal(&format!("ratiod n'a pas pu démarrer :\n\n{error}"));
+            return fatal(&pick(
+                format!("ratiod n'a pas pu démarrer :\n\n{error}"),
+                format!("ratiod could not start:\n\n{error}"),
+            ));
         }
-        Err(_) => return fatal("ratiod n'a pas pu démarrer : le serveur s'est arrêté brutalement."),
+        Err(_) => {
+            return fatal(&pick(
+                "ratiod n'a pas pu démarrer : le serveur s'est arrêté brutalement.",
+                "ratiod could not start: the server stopped unexpectedly.",
+            ));
+        }
     };
 
     let window = match WindowBuilder::new()
@@ -101,7 +113,16 @@ pub fn run() -> ExitCode {
         .build(&event_loop)
     {
         Ok(window) => window,
-        Err(error) => return fail(&runtime, &engine, &format!("Impossible de créer la fenêtre :\n\n{error}")),
+        Err(error) => {
+            return fail(
+                &runtime,
+                &engine,
+                &pick(
+                    format!("Impossible de créer la fenêtre :\n\n{error}"),
+                    format!("Cannot create the window:\n\n{error}"),
+                ),
+            );
+        }
     };
     // No drag-and-drop handler on purpose: wry would replace WebView2's own handling, which is what
     // delivers HTML5 `dragenter`/`drop` events (with the files) to the page.
@@ -114,16 +135,22 @@ pub fn run() -> ExitCode {
             return fail(
                 &runtime,
                 &engine,
-                &format!(
-                    "ratiod a besoin de Microsoft WebView2 pour afficher son interface, et il est introuvable ou \
-                 inutilisable.\n\nInstalle-le depuis :\n{WEBVIEW2_DOWNLOAD}\n\n({error})"
+                &pick(
+                    format!(
+                        "ratiod a besoin de Microsoft WebView2 pour afficher son interface, et il est introuvable ou \
+                         inutilisable.\n\nInstalle-le depuis :\n{WEBVIEW2_DOWNLOAD}\n\n({error})"
+                    ),
+                    format!(
+                        "ratiod needs Microsoft WebView2 to display its interface, and it is missing or unusable.\n\n\
+                         Install it from:\n{WEBVIEW2_DOWNLOAD}\n\n({error})"
+                    ),
                 ),
             );
         }
     };
 
-    let open_item = MenuItem::new("Ouvrir ratiod", true, None);
-    let quit_item = MenuItem::new("Quitter", true, None);
+    let open_item = MenuItem::new(pick("Ouvrir ratiod", "Open ratiod"), true, None);
+    let quit_item = MenuItem::new(pick("Quitter", "Quit"), true, None);
     let (open_id, quit_id) = (open_item.id().clone(), quit_item.id().clone());
     let menu = Menu::new();
     if let Err(error) = menu.append_items(&[&open_item, &quit_item]) {
@@ -132,7 +159,14 @@ pub fn run() -> ExitCode {
     let icon = match tray_icon::Icon::from_rgba(crate::icon::rgba(32), 32, 32) {
         Ok(icon) => icon,
         Err(error) => {
-            return fail(&runtime, &engine, &format!("Icône de la zone de notification invalide :\n\n{error}"));
+            return fail(
+                &runtime,
+                &engine,
+                &pick(
+                    format!("Icône de la zone de notification invalide :\n\n{error}"),
+                    format!("Invalid notification area icon:\n\n{error}"),
+                ),
+            );
         }
     };
     let tray = match TrayIconBuilder::new()
@@ -147,7 +181,10 @@ pub fn run() -> ExitCode {
             return fail(
                 &runtime,
                 &engine,
-                &format!("Impossible de créer l'icône de la zone de notification :\n\n{error}"),
+                &pick(
+                    format!("Impossible de créer l'icône de la zone de notification :\n\n{error}"),
+                    format!("Cannot create the notification area icon:\n\n{error}"),
+                ),
             );
         }
     };
@@ -253,10 +290,16 @@ fn address_in_use(settings: &Settings) -> ExitCode {
     if instance::notify_running(addr) {
         return ExitCode::SUCCESS;
     }
-    fatal(&format!(
-        "Le port {} est déjà utilisé par un autre programme.\n\nFerme ce programme, ou choisis une autre adresse \
-         avec la variable d'environnement RATIOD_BIND.",
-        settings.bind.port()
+    let port = settings.bind.port();
+    fatal(&pick(
+        format!(
+            "Le port {port} est déjà utilisé par un autre programme.\n\nFerme ce programme, ou choisis une autre adresse \
+             avec la variable d'environnement RATIOD_BIND."
+        ),
+        format!(
+            "Port {port} is already in use by another program.\n\nClose that program, or pick another address \
+             with the RATIOD_BIND environment variable."
+        ),
     ))
 }
 

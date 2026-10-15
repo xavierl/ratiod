@@ -20,7 +20,10 @@ fn main() -> ExitCode {
         Err(error) => {
             tracing::error!("{error:#}");
             #[cfg(windows)]
-            ratiod::desktop::error_box(&format!("ratiod n'a pas pu démarrer :\n\n{error:#}"));
+            ratiod::desktop::error_box(&ratiod::locale::pick(
+                format!("ratiod n'a pas pu démarrer :\n\n{error:#}"),
+                format!("ratiod could not start:\n\n{error:#}"),
+            ));
             ExitCode::FAILURE
         }
     }

@@ -66,6 +66,9 @@ pub enum Status {
 pub struct Snapshot {
     pub running: bool,
     pub error: Option<String>,
+    /// `profile_not_found` or `profile_invalid`, with `error_detail` for the UI to interpolate.
+    pub error_code: Option<&'static str>,
+    pub error_detail: Option<String>,
     pub client: String,
     /// Sum of the speeds assigned to torrents, bytes/s.
     pub global_speed: u64,
@@ -89,6 +92,9 @@ pub struct TorrentView {
     pub next_announce_in: Option<u64>,
     pub consecutive_fails: u8,
     pub last_error: Option<String>,
+    /// `tracker_failure`, `network`, `http_status`, `invalid_response` or `timeout`.
+    pub last_error_code: Option<&'static str>,
+    pub last_error_detail: Option<String>,
 }
 
 impl Snapshot {
@@ -96,6 +102,8 @@ impl Snapshot {
         Self {
             running: false,
             error: None,
+            error_code: None,
+            error_detail: None,
             client: config.client.clone(),
             global_speed: 0,
             session_uploaded: 0,
@@ -135,7 +143,7 @@ impl EngineHandle {
     }
 
     pub async fn update_config(&self, config: AppConfig) -> Result<(), ConfigError> {
-        let gone = || ConfigError { field: "config", message: "le moteur est arrêté".into() };
+        let gone = || ConfigError { field: "config", code: "engine_stopped", message: "the engine is stopped".into() };
         let (tx, rx) = oneshot::channel();
         self.tx.send(Command::UpdateConfig(config, tx)).map_err(|_| gone())?;
         rx.await.unwrap_or_else(|_| Err(gone()))
@@ -182,7 +190,7 @@ struct Active {
     next_announce: Option<Instant>,
     next_event: Event,
     consecutive_fails: u8,
-    last_error: Option<String>,
+    last_error: Option<AnnounceError>,
     tracker_index: usize,
 }
 
@@ -194,12 +202,19 @@ enum Retire {
     ArchiveSilently,
 }
 
+/// Why the client profile could not be loaded, as shown in the snapshot.
+struct ProfileFailure {
+    code: &'static str,
+    detail: String,
+    message: String,
+}
+
 struct Engine {
     deps: EngineDeps,
     self_tx: mpsc::WeakUnboundedSender<Command>,
     snapshot_tx: watch::Sender<Snapshot>,
     running: bool,
-    error: Option<String>,
+    error: Option<ProfileFailure>,
     profile: Option<ClientProfile>,
     bandwidth: Bandwidth,
     files: BTreeMap<PathBuf, MockedTorrent>,
@@ -314,7 +329,8 @@ impl Engine {
             }
             Err(error) => {
                 tracing::error!("cannot start seeding: {error}");
-                self.error = Some(error.to_string());
+                self.error =
+                    Some(ProfileFailure { code: error.code(), detail: error.detail(), message: error.to_string() });
             }
         }
     }
@@ -348,7 +364,8 @@ impl Engine {
         config.validate(&emulation::list_profiles(&self.deps.clients_dir))?;
         config.save(&self.deps.config_path).map_err(|e| ConfigError {
             field: "config",
-            message: format!("impossible d'enregistrer la configuration : {e}"),
+            code: "save_failed",
+            message: format!("cannot save the configuration: {e}"),
         })?;
         let was_running = self.running;
         if was_running {
@@ -536,7 +553,7 @@ impl Engine {
             }
             Err(error) => {
                 t.consecutive_fails = t.consecutive_fails.saturating_add(1);
-                t.last_error = Some(error.to_string());
+                t.last_error = Some(error.clone());
                 t.tracker_index = (t.tracker_index + 1) % t.torrent.trackers.len();
                 tracing::warn!(torrent = %t.torrent.name, fails = t.consecutive_fails, "announce failed: {error}");
                 if t.consecutive_fails >= max_fails {
@@ -564,13 +581,17 @@ impl Engine {
                 leechers: t.leechers,
                 next_announce_in: t.next_announce.map(|at| at.saturating_duration_since(now).as_secs()),
                 consecutive_fails: t.consecutive_fails,
-                last_error: t.last_error.clone(),
+                last_error: t.last_error.as_ref().map(ToString::to_string),
+                last_error_code: t.last_error.as_ref().map(AnnounceError::code),
+                last_error_detail: t.last_error.as_ref().and_then(AnnounceError::detail),
             })
             .collect();
         torrents.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.info_hash.cmp(&b.info_hash)));
         self.snapshot_tx.send_replace(Snapshot {
             running: self.running,
-            error: self.error.clone(),
+            error: self.error.as_ref().map(|e| e.message.clone()),
+            error_code: self.error.as_ref().map(|e| e.code),
+            error_detail: self.error.as_ref().map(|e| e.detail.clone()),
             client: self.deps.config.client.clone(),
             global_speed: self.bandwidth.total_speed(),
             session_uploaded: self.session_uploaded,

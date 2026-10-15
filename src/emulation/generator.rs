@@ -74,7 +74,7 @@ impl Generator {
         let refresh_every = cfg.refresh_every.unwrap_or(0);
         let timed = matches!(cfg.refresh_on, RefreshOn::Timed | RefreshOn::TimedOrAfterStartedAnnounce);
         if timed && refresh_every < 1 {
-            return Err(AlgorithmError("refreshEvery doit être supérieur à 0".into()));
+            return Err(AlgorithmError("refreshEvery must be greater than 0".into()));
         }
         Ok(Self {
             algorithm: Algorithm::compile(&cfg.algorithm)?,

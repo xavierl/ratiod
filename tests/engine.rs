@@ -86,6 +86,9 @@ async fn failures_are_visible_in_snapshot() {
     .await;
     let error = h.engine.snapshot().torrents[0].last_error.clone().unwrap();
     assert!(error.contains("HTTP 500"), "{error}");
+    let torrent = &h.engine.snapshot().torrents[0];
+    assert_eq!(torrent.last_error_code, Some("http_status"));
+    assert_eq!(torrent.last_error_detail.as_deref(), Some("500"));
 }
 
 #[tokio::test]
@@ -164,7 +167,7 @@ async fn invalid_config_is_rejected_and_seeding_continues() {
     let mut bad = test_config();
     bad.client = "nope.client".into();
     let error = h.engine.update_config(bad).await.unwrap_err();
-    assert_eq!(error.field, "client");
+    assert_eq!((error.field, error.code), ("client", "unknown_client"));
     assert!(!h.dir.path().join("config.json").exists(), "nothing written");
     assert_eq!(tracker.events(), ["started"], "no restart");
     assert!(h.engine.snapshot().running);
@@ -207,7 +210,10 @@ async fn unknown_client_reports_an_error_instead_of_starting() {
     let h = harness(config, &[]).await;
     h.engine.start();
     wait_for("an error", || h.engine.snapshot().error.is_some()).await;
-    assert!(!h.engine.snapshot().running);
+    let snapshot = h.engine.snapshot();
+    assert!(!snapshot.running);
+    assert_eq!(snapshot.error_code, Some("profile_not_found"));
+    assert_eq!(snapshot.error_detail.as_deref(), Some("nope.client"));
 }
 
 #[tokio::test]

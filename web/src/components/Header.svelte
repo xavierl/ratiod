@@ -1,6 +1,7 @@
 <script lang="ts">
   import { startSeed, stopSeed } from '../lib/api';
   import { formatClient } from '../lib/format';
+  import { LOCALES, i18n, setLocale, t } from '../lib/i18n/index.svelte';
   import { app } from '../lib/store.svelte';
   import Icon from './Icon.svelte';
 
@@ -9,10 +10,10 @@
   const running = $derived(snapshot?.running ?? false);
   const badge = $derived(
     !app.connected
-      ? { text: 'Connexion perdue', tone: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300', dot: 'bg-amber-500' }
+      ? { text: t('header.connectionLost'), tone: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300', dot: 'bg-amber-500' }
       : running
-        ? { text: 'Seed actif', tone: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300', dot: 'bg-emerald-500 animate-pulse' }
-        : { text: 'Arrêté', tone: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300', dot: 'bg-zinc-400' },
+        ? { text: t('header.seeding'), tone: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300', dot: 'bg-emerald-500 animate-pulse' }
+        : { text: t('header.stopped'), tone: 'bg-zinc-200 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300', dot: 'bg-zinc-400' },
   );
 
   async function toggle() {
@@ -21,7 +22,7 @@
       if (running) await stopSeed();
       else await startSeed();
     } catch {
-      app.notify('error', 'Action impossible : ratiod ne répond pas.');
+      app.notify('error', t('header.actionFailed'));
     } finally {
       pending = false;
     }
@@ -37,11 +38,26 @@
     <span class="text-sm text-zinc-500">{formatClient(snapshot.client)}</span>
   {/if}
   <div class="ml-auto flex items-center gap-2">
+    <div class="inline-flex rounded-lg border border-zinc-300 p-0.5 text-xs font-semibold dark:border-zinc-700" role="group" aria-label={t('header.language')}>
+      {#each LOCALES as locale (locale)}
+        <button
+          type="button"
+          class="rounded-md px-2 py-1.5 uppercase transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-emerald-500 {i18n.locale === locale
+            ? 'bg-emerald-600 text-white'
+            : 'text-zinc-500 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800'}"
+          aria-pressed={i18n.locale === locale}
+          lang={locale}
+          onclick={() => setLocale(locale)}
+        >
+          {locale}
+        </button>
+      {/each}
+    </div>
     <button class="btn {running ? 'btn-secondary' : 'btn-primary'}" onclick={toggle} disabled={!snapshot || pending || !app.connected}>
       <Icon name={running ? 'pause' : 'play'} />
-      {running ? 'Arrêter' : 'Démarrer'}
+      {running ? t('header.stop') : t('header.start')}
     </button>
-    <button class="btn btn-ghost p-2" aria-label="Réglages" onclick={() => (app.settingsOpen = true)} disabled={!snapshot}>
+    <button class="btn btn-ghost p-2" aria-label={t('header.settings')} onclick={() => (app.settingsOpen = true)} disabled={!snapshot}>
       <Icon name="settings" class="size-5" />
     </button>
   </div>

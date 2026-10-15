@@ -55,16 +55,16 @@ impl Algorithm {
                 let prefix = latin1(prefix)?;
                 let pool = latin1(characters_pool)?;
                 if prefix.is_empty() || prefix.len() >= PEER_ID_LEN {
-                    return Err(AlgorithmError(format!("prefix doit faire 1 à {} caractères", PEER_ID_LEN - 1)));
+                    return Err(AlgorithmError(format!("prefix must be 1 to {} characters long", PEER_ID_LEN - 1)));
                 }
                 if *base == 0 || *base > pool.len() {
-                    return Err(AlgorithmError("base doit être entre 1 et la taille de charactersPool".into()));
+                    return Err(AlgorithmError("base must be between 1 and the size of charactersPool".into()));
                 }
                 Algorithm::Pool { prefix, pool, base: *base }
             }
             AlgorithmConfig::Hash { length } | AlgorithmConfig::HashNoLeadingZero { length } => {
                 if *length == 0 {
-                    return Err(AlgorithmError("length doit être supérieur à 0".into()));
+                    return Err(AlgorithmError("length must be greater than 0".into()));
                 }
                 Algorithm::Hex {
                     length: *length,
@@ -73,7 +73,7 @@ impl Algorithm {
             }
             AlgorithmConfig::DigitRange { inclusive_lower_bound: lower, inclusive_upper_bound: upper } => {
                 if lower > upper {
-                    return Err(AlgorithmError("inclusiveLowerBound doit être ≤ inclusiveUpperBound".into()));
+                    return Err(AlgorithmError("inclusiveLowerBound must be <= inclusiveUpperBound".into()));
                 }
                 Algorithm::DigitRange { lower: *lower, upper: *upper }
             }
@@ -112,7 +112,7 @@ impl Algorithm {
 
 fn latin1(s: &str) -> Result<Vec<u8>, AlgorithmError> {
     s.chars()
-        .map(|c| u8::try_from(u32::from(c)).map_err(|_| AlgorithmError(format!("caractère non Latin-1 : {c}"))))
+        .map(|c| u8::try_from(u32::from(c)).map_err(|_| AlgorithmError(format!("non-Latin-1 character: {c}"))))
         .collect()
 }
 

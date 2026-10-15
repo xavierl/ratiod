@@ -23,14 +23,16 @@ pub struct AppConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Error, Serialize)]
-#[error("{field} : {message}")]
+#[error("{field}: {message}")]
 pub struct ConfigError {
     pub field: &'static str,
+    /// Stable code the UI translates.
+    pub code: &'static str,
     pub message: String,
 }
 
-fn invalid(field: &'static str, message: impl Into<String>) -> ConfigError {
-    ConfigError { field, message: message.into() }
+fn invalid(field: &'static str, code: &'static str, message: impl Into<String>) -> ConfigError {
+    ConfigError { field, code, message: message.into() }
 }
 
 impl AppConfig {
@@ -47,16 +49,16 @@ impl AppConfig {
 
     pub fn validate(&self, known_clients: &[String]) -> Result<(), ConfigError> {
         if self.max_upload_rate < self.min_upload_rate {
-            return Err(invalid("maxUploadRate", "doit être supérieur ou égal au débit minimum"));
+            return Err(invalid("maxUploadRate", "max_below_min", "must be greater than or equal to the minimum rate"));
         }
         if self.simultaneous_seed < 1 {
-            return Err(invalid("simultaneousSeed", "doit être au moins 1"));
+            return Err(invalid("simultaneousSeed", "seed_at_least_one", "must be at least 1"));
         }
         if !(self.upload_ratio_target == -1.0 || self.upload_ratio_target > 0.0) {
-            return Err(invalid("uploadRatioTarget", "doit être -1 (désactivé) ou supérieur à 0"));
+            return Err(invalid("uploadRatioTarget", "invalid_ratio", "must be -1 (disabled) or greater than 0"));
         }
         if !known_clients.contains(&self.client) {
-            return Err(invalid("client", format!("profil client inconnu « {} »", self.client)));
+            return Err(invalid("client", "unknown_client", format!("unknown client profile \"{}\"", self.client)));
         }
         Ok(())
     }
@@ -197,18 +199,20 @@ mod tests {
 
     #[test]
     fn validation_names_the_bad_field() {
-        type Case = (fn(&mut AppConfig), &'static str);
+        type Case = (fn(&mut AppConfig), &'static str, &'static str);
         let cases: [Case; 5] = [
-            (|c| c.max_upload_rate = 10, "maxUploadRate"),
-            (|c| c.simultaneous_seed = 0, "simultaneousSeed"),
-            (|c| c.upload_ratio_target = 0.0, "uploadRatioTarget"),
-            (|c| c.upload_ratio_target = f32::NAN, "uploadRatioTarget"),
-            (|c| c.client = "nope.client".into(), "client"),
+            (|c| c.max_upload_rate = 10, "maxUploadRate", "max_below_min"),
+            (|c| c.simultaneous_seed = 0, "simultaneousSeed", "seed_at_least_one"),
+            (|c| c.upload_ratio_target = 0.0, "uploadRatioTarget", "invalid_ratio"),
+            (|c| c.upload_ratio_target = f32::NAN, "uploadRatioTarget", "invalid_ratio"),
+            (|c| c.client = "nope.client".into(), "client", "unknown_client"),
         ];
-        for (mutate, field) in cases {
+        for (mutate, field, code) in cases {
             let mut c = valid();
             mutate(&mut c);
-            assert_eq!(c.validate(&clients()).unwrap_err().field, field);
+            let error = c.validate(&clients()).unwrap_err();
+            assert_eq!((error.field, error.code), (field, code));
+            assert!(error.message.is_ascii(), "messages are English: {}", error.message);
         }
         let mut ratio = valid();
         ratio.upload_ratio_target = 2.5;

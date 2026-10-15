@@ -410,3 +410,31 @@ seeding continues.
 - **Tests**: icon drawing (size, transparent corners), data folder choice, `/api/desktop/show` route (204 + callback
   invoked / 404), detection of a running instance (local fake server). Manual check: exe in the GUI subsystem,
   window shown, drag and drop, hide on close, Quit, double launch.
+
+## 10. Bilingual interface: French and English (added 2026-10-15)
+
+**Request**: the interface must exist in English and French, with a language choice in the frontend.
+
+**Approved design**:
+- **Frontend dictionaries**: `web/src/lib/i18n/fr.ts` and `en.ts` hold every UI string; `en` is typed against the keys of
+  `fr` (`satisfies Record<keyof typeof fr, string>`), so a missing key fails `svelte-check`. A reactive `t(key, params)`
+  reads the current locale from the store. No i18n library.
+- **Language switch**: a compact **FR | EN** segmented control in the header (also in the Windows window). The choice is
+  saved in `localStorage` (`ratiod.locale`), per browser/WebView. Default: `fr` when `navigator.language` starts with
+  `fr`, otherwise `en`. `<html lang>` follows the choice.
+- **Formatting follows the locale**: French `1,5 Mo`, `142 ko/s`; English `1.5 MB`, `142 kB/s` (decimal units in both).
+  Durations, plurals and the upload summary are localized.
+- **Backend sends stable codes, the frontend translates them**; backend messages become English (logs, API clients):
+  - `ConfigError { field, code, message }` — codes `max_below_min`, `seed_at_least_one`, `invalid_ratio`,
+    `unknown_client`, `save_failed`, `engine_stopped`.
+  - Upload results `{ file, status, code?, message? }` — codes `duplicate`, `too_large`, `invalid_torrent`,
+    `no_http_tracker`, `write_failed`.
+  - `TorrentView` gains `lastErrorCode` (`tracker_failure`, `network`, `http_status`, `invalid_response`, `timeout`) and
+    `lastErrorDetail` (raw tracker text, HTTP status, network detail), next to the English `lastError`.
+  - `Snapshot` gains `errorCode` (`profile_not_found`, `profile_invalid`) and `errorDetail` (profile name / reason).
+  - A tracker's own text (`failure reason`) is shown as received, inside a translated sentence.
+- **Windows message boxes** (shown before the UI exists): French when the Windows UI language is French
+  (`GetUserDefaultUILanguage`, primary language `LANG_FRENCH`), English otherwise.
+- **Tests**: dictionary key parity (type check + a vitest test), formatting in both locales, upload summary in both
+  locales, locale default/persistence logic, backend codes in Rust tests (config validation, upload results,
+  announce errors → snapshot codes). Manual check in the browser in both languages.

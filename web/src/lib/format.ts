@@ -1,4 +1,11 @@
-const UNITS = ['o', 'ko', 'Mo', 'Go', 'To'];
+import type { Locale } from './i18n/core';
+
+const UNITS: Record<Locale, string[]> = {
+  fr: ['o', 'ko', 'Mo', 'Go', 'To'],
+  en: ['B', 'kB', 'MB', 'GB', 'TB'],
+};
+
+const NUMBER_LOCALE: Record<Locale, string> = { fr: 'fr-FR', en: 'en-US' };
 
 const CLIENT_NAMES: Record<string, string> = {
   bittorrent: 'BitTorrent',
@@ -11,27 +18,29 @@ const CLIENT_NAMES: Record<string, string> = {
   vuze: 'Vuze',
 };
 
-function decimal(value: number, digits: number): string {
-  return value.toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+function decimal(value: number, digits: number, locale: Locale): string {
+  return value.toLocaleString(NUMBER_LOCALE[locale], { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-/** Decimal units (1 ko = 1000 o), like the backend. */
-export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '0 o';
+/** Decimal units (1 kB = 1000 B), like the backend. */
+export function formatBytes(bytes: number, locale: Locale): string {
+  const units = UNITS[locale];
+  if (!Number.isFinite(bytes) || bytes <= 0) return `0 ${units[0]}`;
   let value = bytes;
   let unit = 0;
-  while (value >= 1000 && unit < UNITS.length - 1) {
+  while (value >= 1000 && unit < units.length - 1) {
     value /= 1000;
     unit++;
   }
-  return `${decimal(value, unit === 0 || value >= 100 ? 0 : 1)} ${UNITS[unit]}`;
+  return `${decimal(value, unit === 0 || value >= 100 ? 0 : 1, locale)} ${units[unit]}`;
 }
 
-export function formatSpeed(bytesPerSecond: number): string {
-  return `${formatBytes(bytesPerSecond)}/s`;
+export function formatSpeed(bytesPerSecond: number, locale: Locale): string {
+  return `${formatBytes(bytesPerSecond, locale)}/s`;
 }
 
-export function formatDuration(seconds: number | null): string {
+/** `s`, `min` and `h` read the same in French and English; only the placeholder is shared too. */
+export function formatDuration(seconds: number | null, _locale: Locale): string {
   if (seconds === null) return '—';
   const s = Math.max(0, Math.round(seconds));
   if (s < 60) return `${s} s`;
