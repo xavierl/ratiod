@@ -5,8 +5,8 @@ services:
     container_name: ratiod
     restart: unless-stopped
     ports:
-      - "5081:5081"     # interface web
-      - "49200:49200"   # port pair annoncé aux trackers
+      - "5081:5081"     # web interface
+      - "49200:49200"   # peer port announced to trackers
     volumes:
       - ./data:/data
     environment:

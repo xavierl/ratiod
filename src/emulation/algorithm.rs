@@ -1,5 +1,5 @@
-//! Peer-id and key generation algorithms from Joal `.client` profiles.
-//! Values are Latin-1 byte strings (Joal used Java chars ≤ 0xFF).
+//! Peer-id and key generation algorithms from `.client` profiles.
+//! Values are Latin-1 byte strings (profiles only use chars ≤ 0xFF).
 
 use rand::RngExt;
 use serde::Deserialize;

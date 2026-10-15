@@ -21,7 +21,7 @@ fn all_95_profiles_load_and_build_complete_queries() {
 }
 
 #[test]
-fn qbittorrent_query_matches_joal_shape() {
+fn qbittorrent_query_matches_expected_shape() {
     let none = tempfile::tempdir().unwrap();
     let mut profile = emulation::load_profile("qbittorrent-5.2.4.client", none.path()).unwrap();
     let p = AnnounceParams {

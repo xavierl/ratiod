@@ -1,4 +1,4 @@
-//! Emulation of real BitTorrent clients from Joal `.client` profiles.
+//! Emulation of real BitTorrent clients from `.client` profiles.
 
 pub mod algorithm;
 pub mod generator;
@@ -153,7 +153,7 @@ impl ClientProfile {
         &self.headers
     }
 
-    /// Fills the query template exactly like Joal's `BitTorrentClient.createRequestQuery`.
+    /// Fills the query template: placeholders, ip/event parameter removal, `&` cleanup.
     pub fn build_query(&mut self, p: &AnnounceParams, now: Instant) -> String {
         let numwant = if p.event == Event::Stopped { self.numwant_on_stop } else { self.numwant };
         let mut q = self

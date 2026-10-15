@@ -1,99 +1,99 @@
 # ratiod — design
 
-*Date : 2026-10-14 · Statut : en relecture*
+*Date: 2026-10-14 · Status: approved*
 
-Réécriture en Rust de [Joal](https://github.com/anthonyraymond/joal) (Apache 2.0) : un faux client BitTorrent qui
-annonce aux trackers HTTP un upload fictif pour des `.torrent`, sans rien transférer.
+A lightweight BitTorrent ratio emulator written in Rust: a fake BitTorrent client that
+announces fake upload to HTTP trackers for `.torrent` files, without transferring anything.
 
-## 1. Objectif et contraintes
+## 1. Goal and constraints
 
-**Ce qui a été demandé**
-- Réécriture complète, bien plus légère et performante, en Rust.
-- Frontend moderne et agréable, avec ajout de torrents directement depuis l'UI (glisser-déposer multiple).
-- Aucun système d'authentification : usage local.
-- Code hébergé dans un repo **privé** `xavierl/ratiod` sur GitHub.
+**What was requested**
+- A complete rewrite in Rust, much lighter and faster.
+- A modern, pleasant frontend, with torrents added straight from the UI (multi-file drag and drop).
+- No authentication system: local use.
+- Code hosted in a **private** `xavierl/ratiod` repository on GitHub.
 
-**Contexte d'usage**
-- Tourne en **Docker sur un NAS** ; l'UI est consultée depuis les appareils du LAN.
-- Remplace une installation Joal existante : nouveau format libre, mais les `.client` et `.torrent` existants doivent
-  rester réutilisables.
-- Pas de CI ni de registre d'images : l'image est construite sur le NAS (`docker compose build`).
+**Usage context**
+- Runs in **Docker on a NAS**; the UI is used from devices on the LAN.
+- Replaces an existing ratio-emulator installation: the config format is free to change, but existing `.client` and
+  `.torrent` files must remain reusable.
+- No CI and no image registry: the image is built on the NAS (`docker compose build`).
 
-**Critères de réussite**
-1. Les 95 profils `.client` de Joal se chargent et produisent une requête d'annonce valide.
-2. Pour un même profil, la requête d'annonce (query + headers) a la même forme que celle de Joal.
-3. Un dossier `joal-conf` existant (config.json, clients/, torrents/) fonctionne en le montant sur `/data`.
-4. Image Docker < 15 Mo ; mémoire au repos < 30 Mo avec 200 torrents actifs.
-5. Un `.torrent` glissé dans l'UI apparaît dans la liste et est annoncé en moins de 3 s s'il reste un slot libre.
+**Success criteria**
+1. All 95 `.client` profiles load and produce a valid announce request.
+2. For a given profile, the announce request (query + headers) has the same shape as the reference implementation's.
+3. An existing configuration folder (config.json, clients/, torrents/) works when mounted on `/data`.
+4. Docker image < 15 MB; idle memory < 30 MB with 200 active torrents.
+5. A `.torrent` dropped into the UI appears in the list and is announced within 3 s if a slot is free.
 
-## 2. Périmètre
+## 2. Scope
 
-**Inclus (parité Joal + ajouts validés)**
-- Seed global start/stop, **démarrage automatique** au lancement (désactivable).
-- Réglages : débit min/max, seeds simultanés, client émulé, ratio cible, garder les torrents à 0 leecher.
-- Liste des torrents actifs avec débit, upload envoyé, seeders/leechers, prochaine annonce, erreurs.
-- Ajout de `.torrent` par bouton et **glisser-déposer multiple** ; suppression d'un torrent.
-- Surveillance du dossier `torrents/` (un fichier déposé directement sur le NAS est pris en compte).
-- Archivage automatique (ratio atteint, 0 leecher, 5 échecs consécutifs).
+**Included (feature parity with the previous tool + approved additions)**
+- Global seeding start/stop, **automatic start** on launch (can be disabled).
+- Settings: min/max rate, simultaneous seeds, emulated client, target ratio, keep torrents with 0 leechers.
+- List of active torrents with rate, uploaded amount, seeders/leechers, next announce, errors.
+- Adding `.torrent` files with a button and **multi-file drag and drop**; deleting a torrent.
+- Watching the `torrents/` folder (a file dropped directly on the NAS is picked up).
+- Automatic archiving (ratio reached, 0 leechers, 5 consecutive failures).
 
-**Exclu (YAGNI, ajoutable plus tard sans casser l'existant)**
-- Trackers UDP, liens magnet, DHT.
-- Pause/reprise ou ratio par torrent.
-- Statistiques persistantes, historiques, graphiques.
-- Authentification, HTTPS (usage LAN).
-- Détection de l'IP publique (voir §4.4).
-- CI, publication d'images.
+**Excluded (YAGNI, can be added later without breaking anything)**
+- UDP trackers, magnet links, DHT.
+- Per-torrent pause/resume or ratio.
+- Persistent statistics, history, charts.
+- Authentication, HTTPS (LAN use).
+- Public IP detection (see §4.4).
+- CI, image publishing.
 
 ## 3. Architecture
 
-Un seul binaire Rust, `ratiod`, qui embarque le frontend compilé. Stack : `tokio`, `axum`, `hyper` + `hyper-rustls` (client HTTP sans headers implicites,
-gzip via `flate2`), `serde`/`serde_json`, `notify`, `rust-embed`, `rand`/`rand_regex`, `sha1`, `tracing`. Frontend :
-Svelte 5 (runes) + Vite + Tailwind CSS v4, sans routeur.
+A single Rust binary, `ratiod`, that embeds the compiled frontend. Stack: `tokio`, `axum`, `hyper` + `hyper-rustls`
+(HTTP client with no implicit headers, gzip via `flate2`), `serde`/`serde_json`, `notify`, `rust-embed`,
+`rand`/`rand_regex`, `sha1`, `tracing`. Frontend: Svelte 5 (runes) + Vite + Tailwind CSS v4, no router.
 
 ```
 ratiod/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs          démarrage, env, signaux, câblage
-│   ├── config.rs        AppConfig (config.json) + Settings (variables d'env)
-│   ├── torrent.rs       bencode + MockedTorrent (info_hash, nom, taille, trackers)
-│   ├── bencode.rs       décodeur bencode minimal (avec plage d'octets brute du dict `info`)
-│   ├── emulation/       profils .client
-│   │   ├── mod.rs       ClientProfile : chargement, validation, build_query(), headers()
-│   │   ├── algorithm.rs algorithmes peer_id / key
-│   │   ├── generator.rs politiques de rafraîchissement
-│   │   └── urlencode.rs encodeur d'URL configurable
-│   ├── tracker.rs       annonce HTTP, parsing de la réponse, bascule de tracker
-│   ├── bandwidth.rs     débit global aléatoire + répartition par poids + cumul
-│   ├── library.rs       dossier torrents/ + archived/ + watcher
-│   ├── engine.rs        acteur orchestrateur (seul propriétaire de l'état)
-│   └── api.rs           routes axum, SSE, fichiers statiques embarqués
-├── clients/             les ~95 profils .client de Joal (embarqués)
-├── web/                 app Svelte (build → web/dist, embarqué)
+│   ├── main.rs          startup, env, signals, wiring
+│   ├── config.rs        AppConfig (config.json) + Settings (env variables)
+│   ├── torrent.rs       bencode + MockedTorrent (info_hash, name, size, trackers)
+│   ├── bencode.rs       minimal bencode decoder (keeps the raw byte span of the `info` dict)
+│   ├── emulation/       .client profiles
+│   │   ├── mod.rs       ClientProfile: loading, validation, build_query(), headers()
+│   │   ├── algorithm.rs peer_id / key algorithms
+│   │   ├── generator.rs refresh policies
+│   │   └── urlencode.rs configurable URL encoder
+│   ├── tracker.rs       HTTP announce, response parsing, tracker failover
+│   ├── bandwidth.rs     random global rate + weighted split + accumulation
+│   ├── library.rs       torrents/ + archived/ folders + watcher
+│   ├── engine.rs        orchestrator actor (sole owner of the state)
+│   └── api.rs           axum routes, SSE, embedded static files
+├── clients/             the 95 .client profiles (embedded)
+├── web/                 Svelte app (build → web/dist, embedded)
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
-### 3.1 Modèle de concurrence
+### 3.1 Concurrency model
 
-L'`engine` est **une tâche tokio unique qui possède tout l'état** (torrents actifs, file d'attente, bande passante,
-profil client). Les autres composants communiquent avec elle par messages :
+The `engine` is **a single tokio task that owns all the state** (active torrents, queue, bandwidth, client
+profile). The other components talk to it through messages:
 
-- `mpsc<Command>` vers l'engine : `Start`, `Stop`, `UpdateConfig`, `Rescan`, `Delete(infohash)`,
-  `AnnounceDone(infohash, Result)`, `Shutdown`. Un `Rescan` relit le dossier et réconcilie : nouveaux fichiers en file, fichiers disparus retirés (avec `stopped`).
-- `watch<Snapshot>` depuis l'engine : l'état complet, sérialisable, publié à chaque changement et à chaque tick.
+- `mpsc<Command>` to the engine: `Start`, `Stop`, `UpdateConfig`, `Rescan`, `Delete(infohash)`,
+  `AnnounceDone(infohash, Result)`, `Shutdown`. A `Rescan` re-reads the folder and reconciles: new files join the
+  queue, files that disappeared are removed (with `stopped`).
+- `watch<Snapshot>` from the engine: the complete, serializable state, published on every change and every tick.
 
-Les annonces HTTP sont lancées dans des tâches séparées (`tokio::spawn`), plafonnées à 20 simultanées par un
-`Semaphore`. Leur résultat revient sous forme de `Command::AnnounceDone`. L'engine ne bloque jamais sur le réseau et
-n'utilise aucun verrou.
+HTTP announces run in separate tasks (`tokio::spawn`), capped at 20 concurrent ones by a `Semaphore`. Their result
+comes back as `Command::AnnounceDone`. The engine never blocks on the network and uses no locks.
 
-La boucle de l'engine utilise `tokio::select!` sur : les commandes, un tick d'une seconde (cumul de l'upload,
-déclenchement des annonces dont l'heure est passée) et le rafraîchissement du débit global (20 min).
+The engine loop runs `tokio::select!` over: commands, a one-second tick (upload accumulation, firing announces
+whose time has come) and the global rate refresh (20 min).
 
-### 3.2 Flux de données
+### 3.2 Data flow
 
 ```
-UI ──POST /api/torrents──▶ api ──écrit──▶ /data/torrents/x.torrent
+UI ──POST /api/torrents──▶ api ──writes──▶ /data/torrents/x.torrent
                                               │ notify
                                               ▼
                          library ──Rescan──▶ engine ──spawn──▶ tracker (started)
@@ -102,148 +102,149 @@ UI ──POST /api/torrents──▶ api ──écrit──▶ /data/torrents/x.
 engine ──watch<Snapshot>──▶ api ──SSE /api/events──▶ UI
 ```
 
-Un upload depuis l'UI passe par le même chemin qu'un fichier déposé à la main : une seule source de vérité,
-le dossier.
+An upload from the UI follows the same path as a file dropped by hand: a single source of truth, the folder.
 
-## 4. Composants
+## 4. Components
 
 ### 4.1 `config`
 
-**`/data/config.json`** : mêmes clés que Joal, relu au démarrage, réécrit par `PUT /api/config`. S'il est absent,
-il est créé avec les valeurs ci-dessous.
+**`/data/config.json`**: same keys as before, read at startup, rewritten by `PUT /api/config`. If it is missing, it
+is created with the values below.
 
-| Clé | Type | Défaut | Validation |
+| Key | Type | Default | Validation |
 |---|---|---|---|
-| `minUploadRate` | u64 (ko/s) | 30 | ≥ 0 |
-| `maxUploadRate` | u64 (ko/s) | 170 | ≥ `minUploadRate` |
+| `minUploadRate` | u64 (kB/s) | 30 | ≥ 0 |
+| `maxUploadRate` | u64 (kB/s) | 170 | ≥ `minUploadRate` |
 | `simultaneousSeed` | u32 | 200 | ≥ 1 |
-| `client` | string | dernier profil qBittorrent embarqué | doit exister |
+| `client` | string | latest embedded qBittorrent profile | must exist |
 | `keepTorrentWithZeroLeechers` | bool | true | — |
-| `uploadRatioTarget` | f32 | -1 | `-1` (désactivé) ou > 0 |
+| `uploadRatioTarget` | f32 | -1 | `-1` (disabled) or > 0 |
 
-Les valeurs par défaut sont celles de Joal. Comme dans Joal, 1 ko = 1000 octets.
+1 kB = 1000 bytes.
 
-**Variables d'environnement** (non modifiables depuis l'UI) :
+**Environment variables** (not editable from the UI):
 
-| Variable | Défaut binaire | Défaut image Docker |
+| Variable | Binary default | Docker image default |
 |---|---|---|
 | `RATIOD_BIND` | `127.0.0.1:5081` | `0.0.0.0:5081` |
 | `RATIOD_DATA_DIR` | `./data` | `/data` |
-| `RATIOD_PEER_PORT` | aléatoire 49152–65534 | `49200` |
+| `RATIOD_PEER_PORT` | random 49152–65534 | `49200` |
 | `RATIOD_AUTOSTART` | `true` | `true` |
 | `RUST_LOG` | `info` | `info` |
 
-### 4.2 `torrent` et `bencode`
+### 4.2 `torrent` and `bencode`
 
-- Décodeur bencode maison (≈150 lignes) qui conserve la plage d'octets brute du dict `info` pour calculer
-  `info_hash = SHA-1(octets bruts)`. Pas de ré-encodage, donc pas de risque de hash faux sur un torrent non canonique.
+- A home-made bencode decoder (≈150 lines) that keeps the raw byte span of the `info` dict to compute
+  `info_hash = SHA-1(raw bytes)`. No re-encoding, so no risk of a wrong hash on a non-canonical torrent.
 - `MockedTorrent { info_hash: [u8; 20], name, size, trackers: Vec<Url> }`.
-  - `size` : `length`, ou somme des `files[].length`.
-  - `trackers` : `announce-list` aplatie dans l'ordre, sinon `announce`.
-  - Seuls les trackers `http`/`https` sont conservés ; un torrent sans aucun tracker HTTP est refusé.
+  - `size`: `length`, or the sum of `files[].length`.
+  - `trackers`: `announce-list` flattened in order, otherwise `announce`.
+  - Only `http`/`https` trackers are kept; a torrent with no HTTP tracker at all is rejected.
 
 ### 4.3 `emulation`
 
-Charge les profils **au format `.client` de Joal sans modification**. Les profils embarqués (`clients/`, via
-`rust-embed`) sont fusionnés avec `/data/clients/*.client` : à nom égal, le fichier du volume gagne.
+Loads profiles **in the existing `.client` format, unmodified**. Embedded profiles (`clients/`, via `rust-embed`) are
+merged with `/data/clients/*.client`: when names are equal, the file from the volume wins.
 
-**Algorithmes** (champ `algorithm.type`) :
+**Algorithms** (`algorithm.type` field):
 
-| Type | Utilisé pour | Comportement |
+| Type | Used for | Behaviour |
 |---|---|---|
-| `REGEX` | peer_id, key | chaîne aléatoire conforme à `pattern` (`rand_regex`) |
-| `RANDOM_POOL_WITH_CHECKSUM` | peer_id | `prefix` complété à 20 caractères : chaque caractère est `charactersPool[octet aléatoire % base]`, le dernier rend la somme des indices multiple de `base` (même calcul que `RandomPoolWithChecksumPeerIdAlgorithm.java`) |
-| `HASH` | key | `length` caractères hex majuscules aléatoires |
-| `HASH_NO_LEADING_ZERO` | key | idem, zéros de tête retirés |
-| `DIGIT_RANGE_TRANSFORMED_TO_HEX_WITHOUT_LEADING_ZEROES` | key | entier dans `[inclusiveLowerBound, inclusiveUpperBound]` → hex sans zéros de tête |
+| `REGEX` | peer_id, key | random string matching `pattern` (`rand_regex`) |
+| `RANDOM_POOL_WITH_CHECKSUM` | peer_id | `prefix` padded to 20 characters: each character is `charactersPool[random byte % base]`, the last one makes the sum of indices a multiple of `base` |
+| `HASH` | key | `length` random uppercase hex characters |
+| `HASH_NO_LEADING_ZERO` | key | same, leading zeros removed |
+| `DIGIT_RANGE_TRANSFORMED_TO_HEX_WITHOUT_LEADING_ZEROES` | key | integer in `[inclusiveLowerBound, inclusiveUpperBound]` → hex without leading zeros |
 
-`keyCase` (`upper`/`lower`/`none`) s'applique à la key générée.
+`keyCase` (`upper`/`lower`/`none`) applies to the generated key.
 
-**Politiques de rafraîchissement** (`refreshOn`) :
+**Refresh policies** (`refreshOn`):
 
-| Valeur | Comportement |
+| Value | Behaviour |
 |---|---|
-| `NEVER` | une valeur pour toute la durée du processus |
-| `ALWAYS` | nouvelle valeur à chaque annonce |
-| `TIMED` | nouvelle valeur toutes les `refreshEvery` secondes |
-| `TORRENT_PERSISTENT` | une valeur par torrent, conservée jusqu'à son retrait |
-| `TORRENT_VOLATILE` | une valeur par torrent, oubliée après l'annonce `stopped` |
-| `TIMED_OR_AFTER_STARTED_ANNOUNCE` | nouvelle valeur après `refreshEvery` secondes, ou après chaque annonce `started` |
+| `NEVER` | one value for the whole process lifetime |
+| `ALWAYS` | a new value on every announce |
+| `TIMED` | a new value every `refreshEvery` seconds |
+| `TORRENT_PERSISTENT` | one value per torrent, kept until the torrent is removed |
+| `TORRENT_VOLATILE` | one value per torrent, forgotten after the `stopped` announce |
+| `TIMED_OR_AFTER_STARTED_ANNOUNCE` | a new value after `refreshEvery` seconds, or after every `started` announce |
 
-**Encodeur d'URL** : chaque octet est conservé s'il correspond à `encodingExclusionPattern`, sinon encodé `%XX`
-avec la casse `encodedHexCase`. Il s'applique à l'info_hash (20 octets bruts), à la key, et au peer_id si
-`shouldUrlEncode` est vrai.
+**URL encoder**: each byte is kept if it matches `encodingExclusionPattern`, otherwise encoded as `%XX` with the
+`encodedHexCase` casing. It applies to the info_hash (20 raw bytes), to the key, and to the peer_id when
+`shouldUrlEncode` is true.
 
-**Construction de la query** (même algorithme que `BitTorrentClient.createRequestQuery`) :
-1. Fusion des `&` consécutifs du template.
-2. Remplacement de `{infohash} {uploaded} {downloaded} {left} {port} {numwant} {peerid} {key}`.
-3. Suppression des paramètres `…={ip}` / `…={ipv6}`.
-4. Événement `none` : suppression du paramètre `…={event}` ; sinon `started` / `stopped`.
-5. `numwant` vaut `numwantOnStop` pour `stopped`, `numwant` sinon.
-6. Si un `{…}` subsiste, **le profil est invalide** (refusé au chargement, testé sur des valeurs factices).
-7. Suppression des `&` en début et en fin.
+**Query building**:
+1. Collapse consecutive `&` in the template.
+2. Replace `{infohash} {uploaded} {downloaded} {left} {port} {numwant} {peerid} {key}`.
+3. Remove the `…={ip}` / `…={ipv6}` parameters.
+4. Event `none`: remove the `…={event}` parameter; otherwise `started` / `stopped`.
+5. `numwant` is `numwantOnStop` for `stopped`, `numwant` otherwise.
+6. If any `{…}` remains, **the profile is invalid** (rejected at load time, checked with dummy values).
+7. Strip leading and trailing `&`.
 
-**Headers** : liste ordonnée du profil, avec `{java}` → `21.0.4`, `{os}` → `Linux`, `{locale}` → `en-US`
-(valeurs fixes et crédibles). Un placeholder inconnu rend le profil invalide.
+**Headers**: the profile's ordered list, with `{java}` → `21.0.4`, `{os}` → `Linux`, `{locale}` → `en-US` (fixed,
+plausible values). An unknown placeholder makes the profile invalid.
 
 ### 4.4 `tracker`
 
-- Requête `GET {announce_url}{?|&}{query}`. La query est ajoutée **telle quelle, sans ré-encodage** : l'URL est
-  construite comme chaîne puis parsée, et un test vérifie que le chemin+query envoyé est identique octet pour octet.
-- Client `hyper` (et non `reqwest`, qui ajoute un `Accept: */*` impossible à retirer) : seuls `Host` (en premier, comme les vrais clients) puis les headers du profil sont envoyés, en casse « Title-Case ».
-  Timeout de 30 s, gzip accepté si le profil l'annonce.
-- Réponse bencode :
-  - `failure reason` → erreur.
-  - Sinon `interval` (obligatoire), `complete`, `incomplete` (0 si absents).
-  - `seeders = max(0, complete − 1)` (on se retire du compte), `leechers = incomplete`.
-- En cas d'échec, on passe au tracker suivant de la liste (en boucle). Le compteur d'échecs consécutifs est remis à
-  zéro au premier succès.
-- **IP publique** : non détectée. Aucun profil n'utilise `{ip}`, et Joal retire déjà `{ipv6}` quand l'IP détectée
-  est une IPv4 (cas habituel). Cela évite des appels à des services tiers.
-- **Port annoncé** : `RATIOD_PEER_PORT`. Un `TcpListener` y écoute réellement (connexions acceptées puis fermées)
-  pour que le port paraisse ouvert.
+- Request `GET {announce_url}{?|&}{query}`. The query is appended **as is, without re-encoding**: the URL is built
+  as a string and then parsed, and a test checks that the path+query sent is byte-for-byte identical.
+- `hyper` client (not `reqwest`, which adds an `Accept: */*` header that cannot be removed): only `Host` (first,
+  like real clients) then the profile's headers are sent, in Title-Case.
+  30 s timeout, gzip accepted if the profile announces it.
+- Bencoded response:
+  - `failure reason` → error.
+  - Otherwise `interval` (required), `complete`, `incomplete` (0 if missing).
+  - `seeders = max(0, complete − 1)` (we remove ourselves from the count), `leechers = incomplete`.
+- On failure, move on to the next tracker in the list (cycling). The consecutive failure counter is reset on the
+  first success.
+- **Public IP**: not detected. No profile uses `{ip}`, and `{ipv6}` is only meaningful with an IPv6 address
+  (an IPv4 address is the usual case). This avoids calls to third-party services.
+- **Announced port**: `RATIOD_PEER_PORT`. A `TcpListener` really listens on it (connections accepted then closed)
+  so the port looks open.
 
 ### 4.5 `bandwidth`
 
-Reprise exacte de `BandwidthDispatcher` :
-- **Débit global** tiré uniformément dans `[min, max)` ko/s (ou `max` si min = max), renouvelé toutes les 20 min et
-  à chaque changement de config.
-- **Poids d'un torrent** :
+How the fake upload rate is computed:
+- **Global rate** drawn uniformly in `[min, max)` kB/s (or `max` if min = max), redrawn every 20 min and on every
+  config change.
+- **Torrent weight**:
   ```
-  ratio_leechers = leechers / (seeders + leechers)
-  poids = 0                                         si seeders = 0 ou ratio_leechers = 0
-          ratio_leechers × 100 × ratio_leechers × leechers   sinon
+  leechers_ratio = leechers / (seeders + leechers)
+  weight = 0                                              if seeders = 0 or leechers_ratio = 0
+           leechers_ratio × 100 × leechers_ratio × leechers   otherwise
   ```
-  Avant sa première annonce réussie, un torrent a un poids de 0.
-- **Débit d'un torrent** = débit global × poids / Σ poids (0 si Σ poids = 0). Recalculé à chaque mise à jour des
-  seeders/leechers, à chaque ajout/retrait de torrent et à chaque renouvellement du débit global.
-- **Cumul** : à chaque tick, `uploaded += débit × durée réelle écoulée` (horloge monotone plutôt qu'un intervalle
-  supposé). Le compteur part de 0 à chaque activation du torrent, comme dans Joal.
+  Before its first successful announce, a torrent has a weight of 0.
+- **Torrent rate** = global rate × weight / Σ weights (0 if Σ weights = 0). Recomputed on every seeders/leechers
+  update, every torrent added/removed and every global rate redraw.
+- **Accumulation**: on every tick, `uploaded += rate × actual elapsed time` (monotonic clock rather than an assumed
+  interval). The counter starts from 0 each time the torrent is activated.
 
 ### 4.6 `library`
 
-- **Dossiers** : `/data/torrents` (à seeder) et `/data/torrents/archived`, créés au besoin.
-- **Démarrage** : scan de `torrents/*.torrent`. Les fichiers invalides sont signalés dans les logs et ignorés.
-- **Watcher** (`notify`, regroupement des événements sur 500 ms) : tout changement envoie `Rescan` à l'engine.
-  Filet de sécurité : rescan périodique toutes les 30 s (volumes réseau où inotify ne remonte rien). Le dossier `archived` est ignoré.
-- **`add(bytes, filename)`** (upload depuis l'UI) :
-  1. Parse d'abord ; si le fichier est invalide, il est refusé sans rien écrire.
-  2. Si son info_hash est déjà présent dans `torrents/`, il est refusé comme doublon.
-  3. Sinon, écriture atomique (fichier temporaire puis `rename`) sous un nom assaini.
-- **`archive(infohash)`** : déplace le fichier dans `archived/`, avec suffixe `-1`, `-2`… en cas de conflit de nom.
-- **`delete(infohash)`** : supprime le fichier.
+- **Folders**: `/data/torrents` (to seed) and `/data/torrents/archived`, created when needed.
+- **Startup**: scan of `torrents/*.torrent`. Invalid files are reported in the logs and ignored.
+- **Watcher** (`notify`, events grouped over 500 ms): any change sends `Rescan` to the engine.
+  Safety net: periodic rescan every 30 s (network volumes where inotify reports nothing). The `archived` folder is
+  ignored.
+- **`add(bytes, filename)`** (upload from the UI):
+  1. Parse first; if the file is invalid, it is rejected without writing anything.
+  2. If its info_hash is already present in `torrents/`, it is rejected as a duplicate.
+  3. Otherwise, atomic write (temporary file then `rename`) under a sanitized name.
+- **`archive(infohash)`**: moves the file into `archived/`, with a `-1`, `-2`… suffix on name conflicts.
+- **`delete(infohash)`**: deletes the file.
 
 ### 4.7 `engine`
 
-**État d'un torrent** :
+**Torrent state**:
 ```rust
 struct ActiveTorrent {
     torrent: MockedTorrent,
     status: Status,              // Starting | Seeding
-    uploaded: u64,               // octets cumulés depuis l'activation
-    speed: u64,                  // octets/s attribués
+    uploaded: u64,               // bytes accumulated since activation
+    speed: u64,                  // assigned bytes/s
     seeders: Option<u32>, leechers: Option<u32>,
-    interval: u32,               // dernier interval connu, 5 s au départ
+    interval: u32,               // last known interval, 5 s initially
     next_announce: Instant,
     next_event: Event,           // Started | None
     consecutive_fails: u8,
@@ -251,25 +252,25 @@ struct ActiveTorrent {
     tracker_index: usize,
 }
 ```
-Les torrents présents dans le dossier mais non actifs forment la **file d'attente**.
+Torrents present in the folder but not active form the **queue**.
 
-**Règles** (identiques à Joal) :
+**Rules**:
 
 | Situation | Action |
 |---|---|
-| Start | active `simultaneousSeed` torrents depuis la file ; annonce `started` immédiate |
-| `started`/régulière OK | programme la suivante à `interval` s ; met à jour seeders/leechers et les débits |
-| OK avec seeders < 1 ou leechers < 1, et `keepTorrentWithZeroLeechers = false` | `stopped`, archive, active le suivant |
-| Régulière OK et `uploaded ≥ ratio × taille` (si ratio ≠ -1) | `stopped`, archive, active le suivant |
-| Échec | réessai après le dernier `interval` connu (5 s au départ), avec le même événement |
-| 5 échecs consécutifs | archive **sans** `stopped`, active le suivant |
-| Fichier ajouté au dossier | rejoint la file ; activé immédiatement si un slot est libre |
-| Fichier supprimé / `DELETE` | `stopped` s'il est actif (sans attendre la réponse), retrait, active le suivant |
-| Stop global | `stopped` pour tous les actifs, sauf ceux dont le `started` n'a pas encore réussi ; attente max 5 s |
-| `PUT /api/config` | enregistre ; si le seed tourne : Stop global puis Start avec la nouvelle config |
-| SIGTERM / Ctrl-C | Stop global puis sortie |
+| Start | activate `simultaneousSeed` torrents from the queue; immediate `started` announce |
+| `started`/regular OK | schedule the next one at `interval` s; update seeders/leechers and rates |
+| OK with seeders < 1 or leechers < 1, and `keepTorrentWithZeroLeechers = false` | `stopped`, archive, activate the next one |
+| Regular OK and `uploaded ≥ ratio × size` (if ratio ≠ -1) | `stopped`, archive, activate the next one |
+| Failure | retry after the last known `interval` (5 s initially), with the same event |
+| 5 consecutive failures | archive **without** `stopped`, activate the next one |
+| File added to the folder | joins the queue; activated immediately if a slot is free |
+| File removed / `DELETE` | `stopped` if active (without waiting for the answer), removal, activate the next one |
+| Global stop | `stopped` for every active torrent, except those whose `started` has not succeeded yet; wait 5 s max |
+| `PUT /api/config` | save; if seeding: global Stop, then Start with the new config |
+| SIGTERM / Ctrl-C | global Stop, then exit |
 
-**Snapshot** (publié via `watch`, sérialisé en JSON pour le SSE) :
+**Snapshot** (published through `watch`, serialized as JSON for SSE):
 ```json
 {
   "running": true,
@@ -285,135 +286,127 @@ Les torrents présents dans le dossier mais non actifs forment la **file d'atten
   }]
 }
 ```
-`sessionUploaded` est la somme des `uploaded` depuis le lancement du processus, torrents archivés compris.
+`sessionUploaded` is the sum of `uploaded` since the process started, archived torrents included.
 
 ### 4.8 `api`
 
-| Méthode | Route | Corps / réponse |
+| Method | Route | Body / response |
 |---|---|---|
-| GET | `/api/events` | SSE `event: snapshot`, un à la connexion puis toutes les secondes ; keep-alive 15 s |
+| GET | `/api/events` | SSE `event: snapshot`, one on connection then every second; keep-alive 15 s |
 | POST | `/api/seed/start` | 204 |
 | POST | `/api/seed/stop` | 204 |
 | GET | `/api/config` | `AppConfig` |
-| PUT | `/api/config` | `AppConfig` → 200, ou 400 `{ "field": "…", "message": "…" }` |
-| GET | `/api/clients` | `["qbittorrent-5.2.4.client", …]` triés par nom puis version décroissante |
-| POST | `/api/torrents` | multipart, champ `files` répété → 200 `[{ "file", "status": "added"\|"duplicate"\|"invalid", "message"? }]` ; limite 10 Mo par fichier |
-| DELETE | `/api/torrents/{infoHash}` | 204, ou 404 |
-| GET | `/*` | fichiers de `web/dist` embarqués ; repli sur `index.html` |
+| PUT | `/api/config` | `AppConfig` → 200, or 400 `{ "field": "…", "message": "…" }` |
+| GET | `/api/clients` | `["qbittorrent-5.2.4.client", …]` sorted by name then descending version |
+| POST | `/api/torrents` | multipart, repeated `files` field → 200 `[{ "file", "status": "added"\|"duplicate"\|"invalid", "message"? }]`; 10 MB limit per file |
+| DELETE | `/api/torrents/{infoHash}` | 204, or 404 |
+| GET | `/*` | embedded `web/dist` files; falls back to `index.html` |
 
-Pas de CORS (même origine). En développement, Vite redirige `/api` vers le backend.
+No CORS (same origin). In development, Vite proxies `/api` to the backend.
 
 ## 5. Interface
 
-Une page unique, responsive, avec thème clair/sombre automatique (`prefers-color-scheme`).
+A single responsive page, with automatic light/dark theme (`prefers-color-scheme`). UI text is in French.
 
-- **En-tête** : nom, pastille d'état (Seed actif / Arrêté / Connexion perdue), client émulé, bouton Start/Stop,
-  bouton Réglages.
-- **Métriques** : débit global, envoyé pendant la session, actifs / `simultaneousSeed`, en file.
-- **Zone de dépôt** : encart visible en permanence ; pendant un glisser, un calque couvre toute la page.
-  Le bouton « parcourir » ouvre un sélecteur multi-fichiers filtré sur `.torrent`.
-- **Notifications** : une par lot d'upload (« 3 ajoutés, 1 doublon »), plus les erreurs réseau.
-- **Tableau des torrents** : nom (tronqué, complet au survol), débit, envoyé, S/L, prochaine annonce (compte à
-  rebours rafraîchi par les snapshots, un par seconde), bouton supprimer (avec confirmation). Les torrents en erreur affichent
-  « Échec n/5 » en couleur d'avertissement, avec `lastError` au survol. Sur mobile, le tableau devient une liste de
-  cartes.
-- **Panneau Réglages** (latéral) : deux champs min/max (ko/s), seeds simultanés, sélecteur de client avec
-  recherche, ratio cible (désactivé ↔ valeur), interrupteur « garder à 0 leecher ». Bouton Enregistrer ; les
-  erreurs 400 s'affichent sous le champ concerné.
-- **Robustesse** : `EventSource` se reconnecte seul ; pendant la coupure, la pastille passe à « Connexion perdue ».
+- **Header**: name, status badge (seeding / stopped / connection lost), emulated client, Start/Stop button,
+  Settings button.
+- **Metrics**: global rate, uploaded during the session, active / `simultaneousSeed`, queued.
+- **Drop zone**: an always-visible box; while dragging, an overlay covers the whole page. The "browse" button opens
+  a multi-file picker filtered on `.torrent`.
+- **Notifications**: one per upload batch ("3 added, 1 duplicate"), plus network errors.
+- **Torrent table**: name (truncated, full on hover), rate, uploaded, S/L, next announce (countdown refreshed by the
+  snapshots, one per second), delete button (with confirmation). Torrents in error show "Failure n/5" in the
+  warning colour, with `lastError` on hover. On mobile, the table becomes a list of cards.
+- **Settings panel** (side panel): min/max fields (kB/s), simultaneous seeds, client picker with search, target
+  ratio (disabled ↔ value), "keep at 0 leechers" switch. Save button; 400 errors are shown under the relevant field.
+- **Resilience**: `EventSource` reconnects on its own; while disconnected, the badge switches to "connection lost".
 
-Arborescence `web/src` : `App.svelte`, `lib/api.ts` (fetch + EventSource), `lib/store.svelte.ts` (état en runes),
-`lib/format.ts` (octets, débits, durées), `components/{Header,Metrics,DropZone,TorrentTable,SettingsPanel,Toasts}.svelte`.
+`web/src` layout: `App.svelte`, `lib/api.ts` (fetch + EventSource), `lib/store.svelte.ts` (rune-based state),
+`lib/format.ts` (bytes, rates, durations), `components/{Header,Metrics,DropZone,TorrentTable,SettingsPanel,Toasts}.svelte`.
 
-## 6. Gestion des erreurs
+## 6. Error handling
 
-- Fichier `.torrent` invalide : refusé à l'upload avec message ; ignoré avec warning s'il est déposé dans le dossier.
-- Profil `.client` invalide : ignoré avec warning. Si le profil configuré est invalide ou absent, le seed refuse de
-  démarrer et l'UI l'affiche.
-- `config.json` illisible au démarrage : sortie avec un message explicite (on n'écrase pas un fichier de
-  l'utilisateur).
-- Erreur réseau ou tracker : attachée au torrent (`lastError`), gérée par les règles de réessai.
-- Aucun `unwrap()` sur une donnée externe ; une erreur sur un torrent n'affecte jamais les autres.
-- Logs `tracing` sur stdout (`docker logs`), niveau `RUST_LOG`.
+- Invalid `.torrent` file: rejected on upload with a message; ignored with a warning if dropped into the folder.
+- Invalid `.client` profile: ignored with a warning. If the configured profile is invalid or missing, seeding
+  refuses to start and the UI shows it.
+- Unreadable `config.json` at startup: exit with an explicit message (a user's file is never overwritten).
+- Network or tracker error: attached to the torrent (`lastError`), handled by the retry rules.
+- No `unwrap()` on external data; an error on one torrent never affects the others.
+- `tracing` logs on stdout (`docker logs`), level `RUST_LOG`.
 
 ## 7. Tests
 
 **Rust (`cargo test`)**
-- `bencode` / `torrent` : mono-fichier, multi-fichiers, `announce-list`, info_hash vérifié sur un vrai `.torrent` de
-  test, dict `info` non canonique.
-- `emulation` :
-  - Encodeur d'URL (exclusions, casse).
-  - Chaque algorithme (format, longueur, absence de zéros de tête, somme de contrôle du pool).
-  - Chaque politique de rafraîchissement, avec une horloge injectable.
-  - `build_query` : events none/started/stopped, numwant/numwantOnStop, suppression de `{ip}`, `&` en double.
-  - Vecteurs repris des tests Java de Joal quand ils existent.
-  - Test global : **les 95 profils se chargent et produisent une query sans placeholder**.
-- `bandwidth` : formule de poids, répartition, cas Σ poids = 0, cumul.
-- `library` : ajout, doublon, invalide, archivage avec conflit de nom.
-- **Intégration engine + faux tracker** (serveur axum local) :
-  - Start → `started` reçu avec les bons paramètres.
-  - Annonces régulières avec `uploaded` croissant.
-  - Ratio atteint → `stopped` + fichier dans `archived/`.
-  - 5 échecs → archivé sans `stopped`.
-  - Stop global → `stopped` pour chaque torrent.
-- **API** : upload multipart (ajouté / doublon / invalide), validation de config, SSE reçoit un snapshot.
+- `bencode` / `torrent`: single-file, multi-file, `announce-list`, info_hash checked against a real test `.torrent`,
+  non-canonical `info` dict.
+- `emulation`:
+  - URL encoder (exclusions, casing).
+  - Each algorithm (format, length, no leading zeros, pool checksum).
+  - Each refresh policy, with an injectable clock.
+  - `build_query`: none/started/stopped events, numwant/numwantOnStop, `{ip}` removal, duplicate `&`.
+  - Global test: **all 95 profiles load and produce a query with no placeholder left**.
+- `bandwidth`: weight formula, split, Σ weights = 0 case, accumulation.
+- `library`: add, duplicate, invalid, archiving with a name conflict.
+- **Engine + fake tracker integration** (local axum server):
+  - Start → `started` received with the right parameters.
+  - Regular announces with a growing `uploaded`.
+  - Ratio reached → `stopped` + file in `archived/`.
+  - 5 failures → archived without `stopped`.
+  - Global stop → `stopped` for every torrent.
+- **API**: multipart upload (added / duplicate / invalid), config validation, SSE receives a snapshot.
 
-**Frontend** : `svelte-check` (types) et `vite build` sans erreur ; vérification manuelle dans le navigateur
-(glisser-déposer, réglages, suppression, mobile).
+**Frontend**: `svelte-check` (types) and `vite build` without errors; manual check in the browser (drag and drop,
+settings, deletion, mobile).
 
-**Vérification réelle** : une annonce vers un tracker public HTTP avec un `.torrent` libre (distribution Linux), en
-inspectant la requête envoyée.
+**Real-world check**: one announce to a public HTTP tracker with a free `.torrent` (a Linux distribution), inspecting
+the request sent.
 
-## 8. Livraison
+## 8. Delivery
 
-- **Dockerfile** multi-stage :
+- Multi-stage **Dockerfile**:
   1. `node:24-alpine` → `npm ci && npm run build` (web/dist).
-  2. `rust:1-alpine` → `cargo build --release` (cible musl native, binaire statique, `strip`, `lto`,
-     `opt-level = "z"` à évaluer contre `3`).
-  3. `scratch` + certificats CA → `ratiod`, `EXPOSE 5081 49200`, `VOLUME /data`.
-- **docker-compose.yml** d'exemple : volume `./data:/data`, ports `5081` et `49200`, `restart: unless-stopped`.
-- **README** : présentation, lancement Docker/compose, variables d'environnement, migration depuis Joal (copier le
-  contenu de `joal-conf` dans `data/`), avertissement d'usage repris de Joal, crédits.
-- Licence Apache 2.0 avec `NOTICE` mentionnant Joal (Anthony Raymond) et l'origine des profils `.client`.
-- Repo GitHub **privé** `xavierl/ratiod`.
+  2. `rust:1-alpine` → `cargo build --release` (native musl target, static binary, `strip`, `lto`,
+     `opt-level = "z"` to be weighed against `3`).
+  3. `scratch` + CA certificates → `ratiod`, `EXPOSE 5081 49200`, `VOLUME /data`.
+- Example **docker-compose.yml**: `./data:/data` volume, ports `5081` and `49200`, `restart: unless-stopped`.
+- **README**: overview, Docker/compose launch, environment variables, reusing an existing configuration folder,
+  usage disclaimer, credits.
+- Apache 2.0 license with a `NOTICE` crediting the origin of the `.client` profiles.
+- **Private** GitHub repository `xavierl/ratiod`.
 
-## 9. Mode bureau Windows (ajout du 2026-10-15)
+## 9. Windows desktop mode (added 2026-10-15)
 
-**Demande** : sous Windows, `ratiod.exe` doit être une application « portable » simple : aucune fenêtre de terminal,
-et le lancement de l'exe affiche directement l'interface, comme une application de bureau.
+**Request**: on Windows, `ratiod.exe` must be a simple "portable" application: no terminal window, and launching
+the exe shows the interface directly, like a desktop application.
 
-**Choix validés** : fenêtre native (pas d'onglet de navigateur) ; fermer la fenêtre la réduit dans la zone de
-notification, le seed continue.
+**Approved choices**: native window (not a browser tab); closing the window minimizes it to the notification area,
+seeding continues.
 
-- **Sous-système GUI** : `#![cfg_attr(windows, windows_subsystem = "windows")]` ; aucune console n'apparaît, même en cas
-  d'erreur.
-- **Fenêtre** : `tao` + `wry` (WebView2, présent sur Windows 10/11), titre « ratiod », ~1100×760, taille minimale
-  420×500, icône ratiod. Elle charge l'interface servie par le serveur interne (`http://127.0.0.1:<port>`), qui démarre
-  avant la fenêtre. Le glisser-déposer de `.torrent` doit fonctionner dans la fenêtre.
-- **Zone de notification** (`tray-icon`) : icône ratiod, info-bulle « ratiod » ; clic gauche → affiche et met au premier
-  plan la fenêtre ; menu « Ouvrir ratiod » / « Quitter ». « Quitter » arrête proprement (annonces `stopped`, attente
-  max 5 s comme le Stop) puis ferme l'application. Fermer la fenêtre la masque seulement.
-- **Instance unique** : si le port de l'interface est déjà occupé, l'exe envoie `POST /api/desktop/show` à
-  `127.0.0.1:<port>` ; une réponse 204 signifie qu'un ratiod tourne déjà : sa fenêtre revient au premier plan et la
-  nouvelle instance quitte sans rien afficher. Sinon : boîte de message « port occupé par un autre programme ».
-  La route `/api/desktop/show` n'existe (204) qu'en mode bureau ; ailleurs 404.
-- **Portable — dossier de données** (si `RATIOD_DATA_DIR` n'est pas défini), dans l'ordre :
-  1. `<dossier de l'exe>\data` s'il existe ;
-  2. `%APPDATA%\ratiod` s'il existe (installations v0.1.0 : pas de migration forcée) ;
-  3. `<dossier de l'exe>\data` si le dossier de l'exe est modifiable ;
-  4. `%APPDATA%\ratiod` sinon.
-- **Logs** : sous Windows (bureau ou `--headless`), écrits dans `<data>\ratiod.log` (recréé à chaque lancement), puisqu'il
-  n'y a pas de console.
-- **Erreurs bloquantes** (WebView2 absent, port occupé, dossier de données inaccessible, `config.json` illisible) :
-  boîte de message Windows en français, puis sortie. Pour WebView2 absent, le message donne le lien de téléchargement
-  officiel de Microsoft.
-- **Mode serveur** : `ratiod.exe --headless` garde le comportement serveur (sans fenêtre ni icône) ;
-  `RATIOD_OPEN_BROWSER` ne s'applique qu'à ce mode. Linux et Docker sont inchangés : les dépendances de bureau ne sont
-  compilées que pour Windows.
-- **Icône** : dessinée par le code (carré arrondi vert `#059669`, flèche blanche vers le haut, comme le favicon), utilisée
-  pour la fenêtre, la zone de notification et l'icône de l'exe (générée en `.ico` par `build.rs`, intégrée via
-  `winresource`). Aucun fichier image binaire dans le repo.
-- **Tests** : dessin de l'icône (taille, transparence des coins), choix du dossier de données, route
-  `/api/desktop/show` (204 + rappel appelé / 404), détection d'une instance existante (faux serveur local). Vérification
-  manuelle : exe en sous-système GUI, fenêtre affichée, glisser-déposer, masquage à la fermeture, Quitter, double
-  lancement.
+- **GUI subsystem**: `#![cfg_attr(windows, windows_subsystem = "windows")]`; no console ever appears, even on error.
+- **Window**: `tao` + `wry` (WebView2, present on Windows 10/11), title "ratiod", ~1100×760, minimum size 420×500,
+  ratiod icon. It loads the interface served by the internal server (`http://127.0.0.1:<port>`), which starts
+  before the window. Dragging and dropping `.torrent` files must work in the window.
+- **Notification area** (`tray-icon`): ratiod icon, "ratiod" tooltip; left click → shows the window and brings it to
+  the front; menu « Ouvrir ratiod » (open) / « Quitter » (quit). « Quitter » shuts down cleanly (`stopped`
+  announces, 5 s max wait like Stop) then closes the application. Closing the window only hides it.
+- **Single instance**: if the interface port is already taken, the exe sends `POST /api/desktop/show` to
+  `127.0.0.1:<port>`; a 204 answer means a ratiod is already running: its window comes to the front and the new
+  instance exits without showing anything. Otherwise: a "port used by another program" message box.
+  The `/api/desktop/show` route only exists (204) in desktop mode; elsewhere it returns 404.
+- **Portable — data folder** (when `RATIOD_DATA_DIR` is not set), in order:
+  1. `<exe folder>\data` if it exists;
+  2. `%APPDATA%\ratiod` if it exists (v0.1.0 installations: no forced migration);
+  3. `<exe folder>\data` if the exe folder is writable;
+  4. `%APPDATA%\ratiod` otherwise.
+- **Logs**: on Windows (desktop or `--headless`), written to `<data>\ratiod.log` (recreated on every launch), since
+  there is no console.
+- **Fatal errors** (WebView2 missing, port taken, data folder unreachable, unreadable `config.json`): a Windows
+  message box in French, then exit. When WebView2 is missing, the message gives Microsoft's official download link.
+- **Server mode**: `ratiod.exe --headless` keeps the server behaviour (no window, no icon); `RATIOD_OPEN_BROWSER`
+  only applies to this mode. Linux and Docker are unchanged: desktop dependencies are only compiled for Windows.
+- **Icon**: drawn in code (green `#059669` rounded square, white up arrow, like the favicon), used for the window,
+  the notification area and the exe icon (generated as `.ico` by `build.rs`, embedded via `winresource`). No binary
+  image file in the repository.
+- **Tests**: icon drawing (size, transparent corners), data folder choice, `/api/desktop/show` route (204 + callback
+  invoked / 404), detection of a running instance (local fake server). Manual check: exe in the GUI subsystem,
+  window shown, drag and drop, hide on close, Quit, double launch.

@@ -23,7 +23,7 @@
   <Metrics />
   <DropZone />
   <TorrentTable />
-  <footer class="pt-2 text-center text-xs text-zinc-400">ratiod · réécriture de Joal en Rust</footer>
+  <footer class="pt-2 text-center text-xs text-zinc-400">ratiod · émulateur de ratio BitTorrent</footer>
 </main>
 <SettingsPanel />
 <Toasts />
