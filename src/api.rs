@@ -97,6 +97,8 @@ struct UploadResult {
     file: String,
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
 }
 
@@ -111,7 +113,7 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Resp
         if field.name() != Some("files") {
             continue;
         }
-        let file = field.file_name().unwrap_or("sans-nom.torrent").to_owned();
+        let file = field.file_name().unwrap_or("unnamed.torrent").to_owned();
         let bytes = match field.bytes().await {
             Ok(bytes) => bytes,
             Err(error) => return (StatusCode::BAD_REQUEST, error.body_text()).into_response(),
@@ -120,12 +122,14 @@ async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Resp
         let name = file.clone();
         let outcome = tokio::task::spawn_blocking(move || library.add(&name, &bytes)).await;
         results.push(match outcome {
-            Ok(Ok(_)) => UploadResult { file, status: "added", message: None },
-            Ok(Err(AddError::Duplicate)) => {
-                UploadResult { file, status: "duplicate", message: Some(AddError::Duplicate.to_string()) }
-            }
-            Ok(Err(error)) => UploadResult { file, status: "invalid", message: Some(error.to_string()) },
-            Err(error) => UploadResult { file, status: "invalid", message: Some(error.to_string()) },
+            Ok(Ok(_)) => UploadResult { file, status: "added", code: None, message: None },
+            Ok(Err(error)) => UploadResult {
+                file,
+                status: if matches!(error, AddError::Duplicate) { "duplicate" } else { "invalid" },
+                code: Some(error.code()),
+                message: Some(error.to_string()),
+            },
+            Err(error) => UploadResult { file, status: "invalid", code: None, message: Some(error.to_string()) },
         });
     }
     if results.iter().any(|r| r.status == "added") {
@@ -154,8 +158,9 @@ async fn static_files(uri: Uri) -> Response {
     }
     match Assets::get("index.html") {
         Some(file) => asset("index.html", file),
-        None => (StatusCode::SERVICE_UNAVAILABLE, "Interface non compilée : lancez `npm run build` dans web/.")
-            .into_response(),
+        None => {
+            (StatusCode::SERVICE_UNAVAILABLE, "Web interface not built: run `npm run build` in web/.").into_response()
+        }
     }
 }
 

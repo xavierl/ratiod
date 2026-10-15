@@ -27,16 +27,38 @@ pub struct AnnounceResponse {
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum AnnounceError {
-    #[error("refusé par le tracker : {0}")]
+    #[error("rejected by the tracker: {0}")]
     Failure(String),
-    #[error("erreur réseau : {0}")]
+    #[error("network error: {0}")]
     Network(String),
-    #[error("le tracker a répondu HTTP {0}")]
+    #[error("the tracker answered HTTP {0}")]
     Status(u16),
-    #[error("réponse du tracker invalide : {0}")]
+    #[error("invalid tracker response: {0}")]
     Invalid(String),
-    #[error("le tracker n'a pas répondu à temps")]
+    #[error("the tracker did not answer in time")]
     Timeout,
+}
+
+impl AnnounceError {
+    /// Stable code the UI translates.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Failure(_) => "tracker_failure",
+            Self::Network(_) => "network",
+            Self::Status(_) => "http_status",
+            Self::Invalid(_) => "invalid_response",
+            Self::Timeout => "timeout",
+        }
+    }
+
+    /// Raw detail shown inside the translated sentence (tracker text, network text, status number).
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            Self::Failure(text) | Self::Network(text) | Self::Invalid(text) => Some(text.clone()),
+            Self::Status(status) => Some(status.to_string()),
+            Self::Timeout => None,
+        }
+    }
 }
 
 pub fn announce_url(tracker: &str, query: &str) -> String {
@@ -53,7 +75,7 @@ pub fn parse_response(body: &[u8]) -> Result<AnnounceResponse, AnnounceError> {
         .get("interval")
         .and_then(Value::as_int)
         .filter(|&i| i > 0)
-        .ok_or_else(|| AnnounceError::Invalid("intervalle absent".into()))?;
+        .ok_or_else(|| AnnounceError::Invalid("missing interval".into()))?;
     let count = |key: &str| {
         let n = root.get(key).and_then(Value::as_int).unwrap_or(0).clamp(0, i64::from(u32::MAX));
         u32::try_from(n).unwrap_or(u32::MAX)
@@ -93,11 +115,11 @@ impl HttpClient {
     }
 
     async fn fetch(&self, url: &str, headers: &[(String, String)]) -> Result<Vec<u8>, AnnounceError> {
-        let uri: http::Uri = url.parse().map_err(|e| AnnounceError::Invalid(format!("URL invalide : {e}")))?;
+        let uri: http::Uri = url.parse().map_err(|e| AnnounceError::Invalid(format!("invalid URL: {e}")))?;
         let host = uri
             .authority()
             .map(|a| a.as_str().to_owned())
-            .ok_or_else(|| AnnounceError::Invalid("URL sans hôte".into()))?;
+            .ok_or_else(|| AnnounceError::Invalid("URL without a host".into()))?;
         let mut request = http::Request::get(uri).header(http::header::HOST, host);
         for (name, value) in headers {
             request = request.header(name.as_str(), value.as_str());
@@ -130,7 +152,7 @@ fn gunzip(data: &[u8]) -> Result<Vec<u8>, AnnounceError> {
     flate2::read::GzDecoder::new(data)
         .take(MAX_BODY as u64)
         .read_to_end(&mut out)
-        .map_err(|e| AnnounceError::Invalid(format!("gzip invalide : {e}")))?;
+        .map_err(|e| AnnounceError::Invalid(format!("invalid gzip data: {e}")))?;
     Ok(out)
 }
 
@@ -138,7 +160,7 @@ fn error_chain(error: &dyn std::error::Error) -> String {
     let mut message = error.to_string();
     let mut source = error.source();
     while let Some(cause) = source {
-        message.push_str(" : ");
+        message.push_str(": ");
         message.push_str(&cause.to_string());
         source = cause.source();
     }
@@ -249,6 +271,20 @@ mod tests {
         assert!(matches!(parse_response(b"d8:completei1ee"), Err(AnnounceError::Invalid(_))));
         assert!(matches!(parse_response(b"d8:intervali0ee"), Err(AnnounceError::Invalid(_))));
         assert!(matches!(parse_response(b"i5e"), Err(AnnounceError::Invalid(_))));
+    }
+
+    #[test]
+    fn announce_errors_expose_a_code_and_a_detail() {
+        let cases = [
+            (AnnounceError::Failure("nope".into()), "tracker_failure", Some("nope")),
+            (AnnounceError::Network("refused".into()), "network", Some("refused")),
+            (AnnounceError::Status(503), "http_status", Some("503")),
+            (AnnounceError::Invalid("bad".into()), "invalid_response", Some("bad")),
+            (AnnounceError::Timeout, "timeout", None),
+        ];
+        for (error, code, detail) in cases {
+            assert_eq!((error.code(), error.detail().as_deref()), (code, detail), "{error:?}");
+        }
     }
 
     #[test]

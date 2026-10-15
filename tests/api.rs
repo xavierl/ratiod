@@ -67,7 +67,8 @@ async fn upload_reports_each_file_and_queues_new_torrents() {
     let statuses: Vec<&str> = body.as_array().unwrap().iter().map(|r| r["status"].as_str().unwrap()).collect();
     assert_eq!(statuses, ["added", "duplicate", "invalid"]);
     assert_eq!(body[0]["file"], "good.torrent");
-    assert!(body[0].get("message").is_none());
+    assert!(body[0].get("message").is_none() && body[0].get("code").is_none());
+    assert_eq!((body[1]["code"].as_str(), body[2]["code"].as_str()), (Some("duplicate"), Some("invalid_torrent")));
     assert!(!body[2]["message"].as_str().unwrap().is_empty());
     assert!(h.library.torrents_dir().join("good.torrent").exists());
     wait_for("queued torrent", || h.engine.snapshot().queued == 1).await;
