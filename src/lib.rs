@@ -12,6 +12,7 @@ pub mod icon;
 pub mod instance;
 pub mod library;
 pub mod locale;
+pub mod recovery;
 pub mod server;
 
 #[doc(hidden)]

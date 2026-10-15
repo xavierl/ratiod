@@ -6,34 +6,63 @@
 use std::net::TcpListener;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tao::dpi::LogicalSize;
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::windows::WindowExtWindows;
-use tao::window::{Icon as WindowIcon, WindowBuilder};
+use tao::window::{Icon as WindowIcon, Window, WindowBuilder};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use webview2_com::Microsoft::Web::WebView2::Win32::{
+    COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
+};
+use webview2_com::ProcessFailedEventHandler;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    ASFW_ANY, AllowSetForegroundWindow, MB_ICONERROR, MB_OK, MessageBoxW, SetForegroundWindow,
+    ASFW_ANY, AllowSetForegroundWindow, DestroyWindow, MB_ICONERROR, MB_ICONWARNING, MB_OK, MESSAGEBOX_STYLE,
+    MessageBoxW, SetForegroundWindow,
 };
+use wry::{WebContext, WebView, WebViewExtWindows};
 
 use crate::config::Settings;
 use crate::engine::EngineHandle;
 use crate::instance;
 use crate::locale::pick;
+use crate::recovery::{Decision, RecoveryPolicy};
 use crate::server::{self, StartError};
 
 const WEBVIEW2_DOWNLOAD: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
 /// The engine waits at most 5 s for the `stopped` announces: leave it a little more.
 const QUIT_TIMEOUT: Duration = Duration::from_secs(6);
+/// Building the webview is tried this many times: an overlay injected into WebView2 can crash it while it starts.
+const BUILD_ATTEMPTS: u32 = 3;
+const BUILD_RETRY_PAUSE: Duration = Duration::from_millis(500);
+/// Display crashes recovered within `RECOVERY_WINDOW` before giving up (a crash loop is not recoverable).
+const MAX_RECOVERIES: usize = 3;
+const RECOVERY_WINDOW: Duration = Duration::from_secs(60);
 
 enum UserEvent {
     Menu(MenuEvent),
     Tray(TrayIconEvent),
     Show,
+    /// A WebView2 process of the webview number `generation` failed.
+    WebViewFailed {
+        generation: u64,
+        kind: COREWEBVIEW2_PROCESS_FAILED_KIND,
+    },
+}
+
+/// How to get the display back after a WebView2 process failure.
+enum Repair {
+    /// The browser process is gone: the webview is dead and must be built again.
+    Recreate,
+    /// Only the page's renderer is gone or stuck: the webview reloads it.
+    Reload,
 }
 
 /// What the server thread reports once it is listening (or why it is not).
@@ -44,11 +73,20 @@ enum Started {
 
 /// A blocking error dialog (there is no console in the GUI subsystem).
 pub fn error_box(text: &str) {
+    message_box(text, MB_ICONERROR);
+}
+
+/// A non-blocking warning dialog: shown from its own thread so the event loop (window, tray) keeps running.
+fn warning_box(text: String) {
+    std::thread::spawn(move || message_box(&text, MB_ICONWARNING));
+}
+
+fn message_box(text: &str, icon: MESSAGEBOX_STYLE) {
     let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
     let (text, title) = (wide(text), wide("ratiod"));
     // SAFETY: both buffers are NUL-terminated and outlive the call; a null owner window is allowed.
     unsafe {
-        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | icon);
     }
 }
 
@@ -124,12 +162,12 @@ pub fn run() -> ExitCode {
             );
         }
     };
-    // No drag-and-drop handler on purpose: wry would replace WebView2's own handling, which is what
-    // delivers HTML5 `dragenter`/`drop` events (with the files) to the page.
     // WebView2 keeps its profile in the data folder, not next to the exe (which may be read-only).
-    let mut web_context = wry::WebContext::new(Some(settings.data_dir.join("webview2")));
-    let _webview = match wry::WebViewBuilder::new_with_web_context(&mut web_context).with_url(&url).build(&window) {
-        Ok(webview) => webview,
+    // On Windows the context only carries the data folder: it is reused by every (re)built webview.
+    let mut web_context = WebContext::new(Some(settings.data_dir.join("webview2")));
+    let mut generation = 0;
+    let mut webview = match build_webview(&window, &mut web_context, &url, &proxy, generation) {
+        Ok(webview) => Some(webview),
         Err(error) => {
             tracing::error!("cannot create the webview: {error}");
             return fail(
@@ -193,12 +231,14 @@ pub fn run() -> ExitCode {
     MenuEvent::set_event_handler(Some(move |event| {
         let _ = menu_proxy.send_event(UserEvent::Menu(event));
     }));
+    let tray_proxy = proxy.clone();
     TrayIconEvent::set_event_handler(Some(move |event| {
-        let _ = proxy.send_event(UserEvent::Tray(event));
+        let _ = tray_proxy.send_event(UserEvent::Tray(event));
     }));
 
     let mut tray = Some(tray);
     let mut quit_tx = Some(quit_tx);
+    let mut recovery = RecoveryPolicy::new(MAX_RECOVERIES, RECOVERY_WINDOW);
     event_loop.run(move |event, _, flow| {
         *flow = ControlFlow::Wait;
         let show = || {
@@ -220,6 +260,52 @@ pub fn run() -> ExitCode {
                 ..
             })) => show(),
             Event::UserEvent(UserEvent::Menu(menu_event)) if menu_event.id == open_id => show(),
+            // Events of a webview already replaced are stale.
+            Event::UserEvent(UserEvent::WebViewFailed { generation: failed, kind }) if failed == generation => {
+                let Some(repair) = repair_for(kind) else {
+                    tracing::warn!("a WebView2 process failed (kind {}), WebView2 restarts it itself", kind.0);
+                    return;
+                };
+                let decision = recovery.on_failure(Instant::now());
+                tracing::warn!(
+                    "the display failed (WebView2 process failure kind {}), {} failure(s) in the last {} s",
+                    kind.0,
+                    recovery.failures(),
+                    RECOVERY_WINDOW.as_secs()
+                );
+                if decision == Decision::GiveUp {
+                    // Stops listening to this webview: no further recovery, no repeated dialog.
+                    generation += 1;
+                    give_up(&url);
+                    return;
+                }
+                match repair {
+                    Repair::Reload => {
+                        if let Some(webview) = &webview
+                            && let Err(error) = webview.load_url(&url)
+                        {
+                            tracing::warn!("cannot reload the page: {error}");
+                        }
+                    }
+                    Repair::Recreate => {
+                        // The old webview's browser process is gone: close it before building a new one in its place.
+                        if let Some(dead) = webview.take() {
+                            close_webview(dead);
+                        }
+                        generation += 1;
+                        match build_webview(&window, &mut web_context, &url, &proxy, generation) {
+                            Ok(rebuilt) => {
+                                tracing::info!("the display has been recreated");
+                                webview = Some(rebuilt);
+                            }
+                            Err(error) => {
+                                tracing::error!("cannot recreate the webview: {error}");
+                                give_up(&url);
+                            }
+                        }
+                    }
+                }
+            }
             Event::UserEvent(UserEvent::Menu(menu_event)) if menu_event.id == quit_id => {
                 window.set_visible(false);
                 if runtime.block_on(tokio::time::timeout(QUIT_TIMEOUT, engine.shutdown())).is_err() {
@@ -236,6 +322,94 @@ pub fn run() -> ExitCode {
             _ => {}
         }
     })
+}
+
+/// Builds the webview in `window` and watches its WebView2 processes, retrying a few times: an overlay
+/// injected into WebView2 can crash it while it starts.
+fn build_webview(
+    window: &Window,
+    context: &mut WebContext,
+    url: &str,
+    proxy: &EventLoopProxy<UserEvent>,
+    generation: u64,
+) -> wry::Result<WebView> {
+    let mut attempt = 1;
+    loop {
+        // No drag-and-drop handler on purpose: wry would replace WebView2's own handling, which is what
+        // delivers HTML5 `dragenter`/`drop` events (with the files) to the page.
+        match wry::WebViewBuilder::new_with_web_context(context).with_url(url).build(window) {
+            Ok(webview) => {
+                watch_failures(&webview, proxy.clone(), generation);
+                return Ok(webview);
+            }
+            Err(error) if attempt < BUILD_ATTEMPTS => {
+                tracing::warn!("cannot create the webview (attempt {attempt}/{BUILD_ATTEMPTS}): {error}");
+                std::thread::sleep(BUILD_RETRY_PAUSE);
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Reports the failures of the webview's WebView2 processes to the event loop, which does the recovery.
+fn watch_failures(webview: &WebView, proxy: EventLoopProxy<UserEvent>, generation: u64) {
+    let handler = ProcessFailedEventHandler::create(Box::new(move |_, args| {
+        let Some(args) = args else { return Ok(()) };
+        let mut kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+        // SAFETY: `kind` is a valid out pointer for the duration of the call.
+        unsafe { args.ProcessFailedKind(&mut kind)? };
+        let _ = proxy.send_event(UserEvent::WebViewFailed { generation, kind });
+        Ok(())
+    }));
+    let mut token = 0;
+    // SAFETY: the handler is a live COM object and `token` a valid out pointer; the registration ends
+    // with the webview (its controller is closed when it is dropped).
+    if let Err(error) = unsafe { webview.webview().add_ProcessFailed(&handler, &mut token) } {
+        tracing::warn!("cannot watch the WebView2 processes: {error}");
+    }
+}
+
+/// Closes a dead webview. wry destroys its container window only for child webviews: it is destroyed
+/// here, or every recreation would leave an empty one behind in the main window.
+fn close_webview(webview: WebView) {
+    let container = webview.hwnd().0 as HWND;
+    drop(webview);
+    // SAFETY: the container window was created on this thread by wry and nothing uses it any more.
+    unsafe {
+        DestroyWindow(container);
+    }
+}
+
+/// The repair a WebView2 process failure needs, `None` for the processes WebView2 restarts itself
+/// (GPU, utility, sandbox helper...).
+fn repair_for(kind: COREWEBVIEW2_PROCESS_FAILED_KIND) -> Option<Repair> {
+    match kind {
+        COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => Some(Repair::Recreate),
+        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+        | COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED
+        | COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => Some(Repair::Reload),
+        _ => None,
+    }
+}
+
+/// The display keeps crashing: stop recovering it and point the user to the browser (seeding goes on).
+fn give_up(url: &str) {
+    tracing::error!("the display crashed too many times, no more recovery (the interface stays reachable at {url})");
+    warning_box(pick(
+        format!(
+            "L'affichage de ratiod a planté plusieurs fois de suite. C'est souvent causé par un logiciel d'overlay \
+             (RivaTuner / MSI Afterburner, Discord…) qui s'injecte dans Microsoft WebView2.\n\nLe seed continue. Tu \
+             peux ouvrir l'interface dans ton navigateur : {url}\n\nPour corriger : dans RivaTuner Statistics Server, \
+             ajoute msedgewebview2.exe avec « Application detection level » sur « None », puis relance ratiod."
+        ),
+        format!(
+            "ratiod's display crashed several times in a row. This is often caused by an overlay program (RivaTuner / \
+             MSI Afterburner, Discord…) that injects itself into Microsoft WebView2.\n\nSeeding continues. You can \
+             open the interface in your browser: {url}\n\nTo fix it: in RivaTuner Statistics Server, add \
+             msedgewebview2.exe with “Application detection level” set to “None”, then restart ratiod."
+        ),
+    ));
 }
 
 /// Server thread: runs the tokio runtime and keeps the server alive until the main thread asks to quit.
