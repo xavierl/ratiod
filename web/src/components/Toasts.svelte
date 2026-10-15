@@ -1,5 +1,6 @@
 <script lang="ts">
   import { fly } from 'svelte/transition';
+  import { t } from '../lib/i18n/index.svelte';
   import { app } from '../lib/store.svelte';
   import Icon from './Icon.svelte';
 
@@ -20,7 +21,7 @@
     >
       <Icon name={icons[toast.kind]} class="mt-0.5 size-4 shrink-0" />
       <p class="flex-1">{toast.text}</p>
-      <button class="opacity-60 hover:opacity-100" aria-label="Fermer la notification" onclick={() => app.dismiss(toast.id)}>
+      <button class="opacity-60 hover:opacity-100" aria-label={t('toast.dismiss')} onclick={() => app.dismiss(toast.id)}>
         <Icon name="x" />
       </button>
     </div>
